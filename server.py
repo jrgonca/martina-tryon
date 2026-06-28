@@ -49,19 +49,59 @@ def tryon_create():
     quality = body.get("quality") or "medium"  # low | medium | high
     size = body.get("size") or "1024x1024"     # 1024x1024 | 1024x1536 | 1536x1024
 
+    # auto-detecta categoria pela descricao se nao for fornecida
+    category = body.get("category")
+    if not category:
+        dlow = desc.lower()
+        if any(w in dlow for w in ["calca", "calça", "short", "bermuda", "jeans", "saia", "saint", "leggin"]):
+            category = "lower_body"
+        elif any(w in dlow for w in ["vestido", "macacao", "macacão"]):
+            category = "dresses"
+        else:
+            category = "upper_body"
+
     if not person or not garment:
         return jsonify({"error": "person_image e garment_image_url obrigatorios"}), 400
 
+    # Constrói prompt categoria-aware
+    if category == "lower_body":
+        body_region = (
+            "Substitua APENAS a parte de baixo da roupa da pessoa (calca, short, bermuda ou saia) "
+            "pela peca da primeira imagem. NAO mude a blusa, camisa ou parte de cima do corpo. "
+            "NAO mude os sapatos."
+        )
+        fidelity = (
+            "Preserve com maxima fidelidade a cor, textura, lavagem (no caso de jeans), "
+            "rasgos, costuras, bolsos, comprimento, modelagem (skinny/wide/oversized) e formato da peca."
+        )
+    elif category == "dresses":
+        body_region = (
+            "Substitua o conjunto de roupa atual da pessoa (blusa+calca ou blusa+saia) "
+            "por este vestido ou macacao da primeira imagem, cobrindo o corpo inteiro como mostrado."
+        )
+        fidelity = (
+            "Preserve com maxima fidelidade a cor, textura, estampa, decote, alcas, comprimento, "
+            "modelagem e formato do vestido/macacao."
+        )
+    else:  # upper_body (default)
+        body_region = (
+            "Substitua APENAS a parte de cima da roupa da pessoa (blusa, camisa, camiseta, regata ou jaqueta) "
+            "pela peca da primeira imagem. NAO mude a calca, short ou parte de baixo do corpo. "
+            "NAO mude os sapatos."
+        )
+        fidelity = (
+            "Preserve com maxima fidelidade a textura, cor, padrao, estampa, recortes, "
+            "comprimento das mangas, decote, modelagem e formato da peca."
+        )
+
     prompt = (
-        f"Coloque a peca de roupa que aparece na primeira imagem (descricao: {desc}) "
+        f"Coloque a peca de roupa que aparece na primeira imagem (descricao: {desc}, categoria: {category}) "
         f"no corpo da pessoa que aparece na segunda imagem. "
-        f"Mantenha exatamente a face, cabelo, maos e fundo da pessoa. "
-        f"Substitua apenas a peca atual que a pessoa veste (na parte de cima do corpo) "
-        f"pela peca da primeira imagem. "
-        f"Preserve com maxima fidelidade a textura, cor, padrao, recortes, comprimento das mangas, "
-        f"decote e formato da peca de referencia. "
+        f"Mantenha exatamente a face, cabelo, maos, e o cenario/fundo da pessoa. "
+        f"{body_region} "
+        f"{fidelity} "
         f"Mantenha a pose, iluminacao e perspectiva originais da segunda imagem. "
-        f"Resultado fotorealista, sem texto ou marca dagua."
+        f"Resultado fotorealista, sem texto, sem marca dagua, sem distorcao corporal."
     )
 
     try:
@@ -204,9 +244,15 @@ button.go:disabled{opacity:.5;cursor:not-allowed}
     <div class="card">
       <h3>2. Peça da Martina</h3>
       <div class="preview" id="prevGarment"><div class="empty">Cola a URL da pagina do produto (.com.br/produtos/...)</div></div>
-      <input type="url" id="productPage" placeholder="https://www.martinaoficial.com.br/produtos/...">
-      <input type="text" id="garmentDesc" placeholder="Descricao (ex: blusa preta de manga longa com recorte)">
+      <input type="url" id="productPage" placeholder="URL da pagina do produto (qualquer loja)">
+      <input type="text" id="garmentDesc" placeholder="Descricao (ex: calca jeans navy blue oversized)">
       <div class="opts">
+        <select id="category">
+          <option value="auto" selected>Categoria: auto-detectar</option>
+          <option value="upper_body">Parte de cima (blusa/camisa/jaqueta)</option>
+          <option value="lower_body">Parte de baixo (calca/short/saia)</option>
+          <option value="dresses">Vestido / macacao</option>
+        </select>
         <select id="quality">
           <option value="medium">Qualidade media (~R$ 1)</option>
           <option value="high" selected>Qualidade alta (~R$ 2,30)</option>
@@ -259,7 +305,7 @@ let resolveTimer = null;
 $("#productPage").addEventListener("input", e=>{
   clearTimeout(resolveTimer);
   const u = e.target.value.trim();
-  if (!u || !u.includes("/produtos/")) return;
+  if (!u || !/^https?:\/\//.test(u)) return;
   resolveTimer = setTimeout(async ()=>{
     setStatus("Extraindo imagem do produto...");
     try {
@@ -307,6 +353,7 @@ $("#btnGo").addEventListener("click", async ()=>{
         garment_image_url: garmentState.url,
         garment_description: $("#garmentDesc").value.trim() || "esta peca de roupa",
         quality: $("#quality").value,
+        category: ($("#category").value === "auto" ? null : $("#category").value),
       }),
     });
     const data = await r.json();
