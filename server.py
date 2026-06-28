@@ -1,120 +1,130 @@
 """
-Martina TryOn — backend Flask (substitui o Cloudflare Worker)
-Roda no Render. Variavel obrigatoria: REPLICATE_API_TOKEN (formato r8_...)
+Martina TryOn — backend Flask (motor: OpenAI Responses + gpt-image-1)
+Roda no Render. Variavel obrigatoria: OPENAI_API_KEY (formato sk-...)
 
 Endpoints:
   GET  /                 healthcheck
   GET  /test             pagina de teste hospedada
-  POST /tryon            cria prediction
-  GET  /tryon/<id>       polling
-  POST /resolve-product  recebe {page_url} e devolve URL da imagem da peca via og:image
+  POST /tryon            cria try-on (sincrono ~20-40s) -> {image_b64}
+  POST /resolve-product  recebe {page_url} e devolve URL da imagem (og:image)
 """
 import os
 import re
 import time
-import json
+import base64
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
-REPLICATE_MODEL_OWNER = "cuuupid"
-REPLICATE_MODEL_NAME  = "idm-vton"
-
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-def _token():
-    t = os.environ.get("REPLICATE_API_TOKEN", "")
+# ---------------------------------------------------------
+def _openai_key():
+    t = os.environ.get("OPENAI_API_KEY", "")
     return t or None
-
-def _hdr():
-    return {
-        "Authorization": f"Token {_token()}",
-        "Content-Type": "application/json",
-    }
-
-_version_cache = {"id": None, "ts": 0}
-def get_latest_version_id():
-    if _version_cache["id"] and time.time() - _version_cache["ts"] < 3600:
-        return _version_cache["id"]
-    r = requests.get(
-        f"https://api.replicate.com/v1/models/{REPLICATE_MODEL_OWNER}/{REPLICATE_MODEL_NAME}",
-        headers=_hdr(), timeout=20,
-    )
-    r.raise_for_status()
-    vid = r.json()["latest_version"]["id"]
-    _version_cache["id"] = vid
-    _version_cache["ts"] = time.time()
-    return vid
 
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
         "service": "martina-tryon",
-        "model": f"{REPLICATE_MODEL_OWNER}/{REPLICATE_MODEL_NAME}",
-        "has_token": bool(_token()),
+        "engine": "openai-gpt-image-1",
+        "has_token": bool(_openai_key()),
         "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     })
 
+# ---------------------------------------------------------
+# /tryon — usa Responses API com tool image_generation (gpt-image-1)
+# ---------------------------------------------------------
 @app.route("/tryon", methods=["POST"])
 def tryon_create():
-    if not _token():
-        return jsonify({"error": "REPLICATE_API_TOKEN not configured"}), 500
+    if not _openai_key():
+        return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
+
     body = request.get_json(silent=True) or {}
-    person = body.get("person_image")
-    garment = body.get("garment_image_url")
-    desc = body.get("garment_description") or "shirt"
-    category = body.get("category") or "upper_body"
+    person = body.get("person_image")          # data URI ou URL publica
+    garment = body.get("garment_image_url")    # URL publica
+    desc = (body.get("garment_description") or "esta peca de roupa").strip()
+    quality = body.get("quality") or "medium"  # low | medium | high
+    size = body.get("size") or "1024x1024"     # 1024x1024 | 1024x1536 | 1536x1024
+
     if not person or not garment:
         return jsonify({"error": "person_image e garment_image_url obrigatorios"}), 400
+
+    prompt = (
+        f"Coloque a peca de roupa que aparece na primeira imagem (descricao: {desc}) "
+        f"no corpo da pessoa que aparece na segunda imagem. "
+        f"Mantenha exatamente a face, cabelo, maos e fundo da pessoa. "
+        f"Substitua apenas a peca atual que a pessoa veste (na parte de cima do corpo) "
+        f"pela peca da primeira imagem. "
+        f"Preserve com maxima fidelidade a textura, cor, padrao, recortes, comprimento das mangas, "
+        f"decote e formato da peca de referencia. "
+        f"Mantenha a pose, iluminacao e perspectiva originais da segunda imagem. "
+        f"Resultado fotorealista, sem texto ou marca dagua."
+    )
+
     try:
-        vid = get_latest_version_id()
         r = requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers=_hdr(),
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {_openai_key()}",
+                "Content-Type": "application/json",
+            },
             json={
-                "version": vid,
-                "input": {
-                    "human_img": person,
-                    "garm_img": garment,
-                    "garment_des": desc,
-                    "category": category,
-                    "crop": False, "force_dc": False, "mask_only": False,
-                },
-            }, timeout=30,
+                "model": "gpt-4.1-mini",
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "input_text", "text": prompt},
+                            {"type": "input_image", "image_url": garment},
+                            {"type": "input_image", "image_url": person},
+                        ],
+                    }
+                ],
+                "tools": [
+                    {
+                        "type": "image_generation",
+                        "output_format": "jpeg",
+                        "quality": quality,
+                        "size": size,
+                    }
+                ],
+            },
+            timeout=180,
         )
         data = r.json()
         if not r.ok:
-            return jsonify({"error": f"replicate {r.status_code}", "detail": data}), 500
-        return jsonify({
-            "id": data["id"], "status": data["status"],
-            "poll_url": f"{request.host_url.rstrip('/')}/tryon/{data['id']}",
-        }), 202
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            return jsonify({"error": f"openai {r.status_code}", "detail": data}), 500
 
-@app.route("/tryon/<pid>", methods=["GET"])
-def tryon_status(pid):
-    if not _token():
-        return jsonify({"error": "REPLICATE_API_TOKEN not configured"}), 500
-    try:
-        r = requests.get(f"https://api.replicate.com/v1/predictions/{pid}",
-                         headers=_hdr(), timeout=20)
-        d = r.json()
-        if not r.ok:
-            return jsonify({"error": f"replicate {r.status_code}", "detail": d}), 500
-        out = d.get("output")
-        if isinstance(out, list) and out: out = out[0]
+        # Procura o output da ferramenta image_generation
+        img_b64 = None
+        for item in data.get("output", []):
+            if item.get("type") == "image_generation_call":
+                img_b64 = item.get("result")
+                if img_b64:
+                    break
+        if not img_b64:
+            return jsonify({
+                "error": "openai response sem imagem",
+                "output_types": [it.get("type") for it in data.get("output", [])],
+                "detail": data,
+            }), 500
+
         return jsonify({
-            "id": d["id"], "status": d["status"], "output": out, "error": d.get("error"),
+            "image_b64": img_b64,
+            "model": "gpt-image-1",
+            "usage": data.get("usage"),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ---------------------------------------------------------
+# /resolve-product — extrai imagem do produto Nuvemshop
+# ---------------------------------------------------------
 @app.route("/resolve-product", methods=["POST"])
 def resolve_product():
-    """Recebe {page_url} e tenta extrair URL da imagem principal do produto (og:image)."""
     body = request.get_json(silent=True) or {}
     url = (body.get("page_url") or "").strip()
     if not url:
@@ -131,19 +141,27 @@ def resolve_product():
         if not og:
             return jsonify({"error": "og:image nao encontrada", "status": r.status_code}), 404
         img = og.group(1).replace("http://", "https://")
-        # tenta substituir versao -640- por -1024- pra qualidade maior
-        hd = re.sub(r"-640-0\.(webp|jpg|jpeg|png)$", r"-1024-0.\1", img, flags=re.I)
+        # tenta substituir versao -640- por -1024- pra qualidade maior, mas VALIDA antes
+        hd_candidate = re.sub(r"-640-0\.(webp|jpg|jpeg|png)$", r"-1024-0.\1", img, flags=re.I)
+        hd = img  # default 640
+        if hd_candidate != img:
+            try:
+                hr = requests.head(hd_candidate, timeout=5, allow_redirects=True)
+                if hr.status_code == 200:
+                    hd = hd_candidate
+            except Exception:
+                pass
         return jsonify({"image_url": img, "image_url_hd": hd})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# =========================================================
-# Pagina de teste hospedada em /test
-# =========================================================
+# ---------------------------------------------------------
+# /test — pagina HTML hospedada
+# ---------------------------------------------------------
 TEST_HTML = r"""<!doctype html>
 <html lang="pt-BR"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Martina TryOn — Teste</title>
+<title>Martina TryOn - Teste</title>
 <style>
 :root{--bg:#fafafa;--fg:#111;--muted:#666;--line:#e5e5e5;--accent:#000;--ok:#059669;--err:#dc2626}
 *{box-sizing:border-box}
@@ -160,7 +178,7 @@ h1{font-weight:700;letter-spacing:.3em;margin:0 0 4px;text-align:center}
 .preview .empty{color:#aaa;font-size:12px;text-align:center;padding:24px}
 label.upload{display:block;margin-top:10px;padding:10px 14px;background:#111;color:#fff;border-radius:6px;text-align:center;cursor:pointer;font-size:13px;letter-spacing:.12em;text-transform:uppercase}
 label.upload input{display:none}
-input[type=url],input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;margin-top:10px;font-size:13px}
+input[type=url],input[type=text],select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:6px;margin-top:10px;font-size:13px;background:#fff}
 .actions{text-align:center;margin:24px 0 8px}
 button.go{background:var(--accent);color:#fff;border:0;padding:14px 28px;border-radius:8px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer}
 button.go:disabled{opacity:.5;cursor:not-allowed}
@@ -170,23 +188,32 @@ button.go:disabled{opacity:.5;cursor:not-allowed}
 .progress>div{height:100%;background:var(--accent);width:0%;transition:width .3s}
 .meta{font-size:11px;color:#888;margin-top:8px;text-align:center}
 .help{font-size:11px;color:#888;margin-top:6px;line-height:1.5}
+.opts{display:flex;gap:8px;margin-top:10px}
+.opts select{flex:1;margin-top:0}
 </style></head><body>
 <div class="wrap">
   <h1>MARTINA</h1>
-  <div class="sub">Provador Virtual — Teste</div>
+  <div class="sub">Provador Virtual - Teste (motor: GPT-Image-1)</div>
 
   <div class="row">
     <div class="card">
       <h3>1. Sua foto</h3>
-      <div class="preview" id="prevPerson"><div class="empty">Sobe uma foto de corpo inteiro, de frente, sem cortar a peça que vai trocar</div></div>
+      <div class="preview" id="prevPerson"><div class="empty">Sobe uma foto sua de corpo inteiro, de frente</div></div>
       <label class="upload">Escolher foto<input type="file" id="filePerson" accept="image/*"></label>
     </div>
     <div class="card">
       <h3>2. Peça da Martina</h3>
-      <div class="preview" id="prevGarment"><div class="empty">Cola a URL da PÁGINA do produto (.com.br/produtos/...) — eu extraio a imagem automaticamente</div></div>
+      <div class="preview" id="prevGarment"><div class="empty">Cola a URL da pagina do produto (.com.br/produtos/...)</div></div>
       <input type="url" id="productPage" placeholder="https://www.martinaoficial.com.br/produtos/...">
-      <input type="text" id="garmentDesc" placeholder="Descrição (ex: blusa preta de manga longa)">
-      <div class="help">Dica: copia a URL direto da barra do navegador quando estiver na página do produto.</div>
+      <input type="text" id="garmentDesc" placeholder="Descricao (ex: blusa preta de manga longa com recorte)">
+      <div class="opts">
+        <select id="quality">
+          <option value="medium">Qualidade media (~R$ 1)</option>
+          <option value="high" selected>Qualidade alta (~R$ 2,30)</option>
+          <option value="low">Qualidade rapida (~R$ 0,30)</option>
+        </select>
+      </div>
+      <div class="help">Dica: copia a URL direto da barra do navegador quando estiver na pagina do produto.</div>
     </div>
     <div class="card">
       <h3>3. Resultado</h3>
@@ -200,7 +227,7 @@ button.go:disabled{opacity:.5;cursor:not-allowed}
     <button class="go" id="btnGo">PROVAR</button>
   </div>
 
-  <div class="meta">Modelo: cuuupid/idm-vton via Replicate · ~15-25s/imagem · ~R$ 0,28 por geração</div>
+  <div class="meta">Modelo: openai/gpt-image-1 (via Responses API) - ~20-40s/imagem</div>
 </div>
 
 <script>
@@ -246,47 +273,48 @@ $("#productPage").addEventListener("input", e=>{
       const img = d.image_url_hd || d.image_url;
       garmentState.url = img;
       setPreview($("#prevGarment"), img);
-      setStatus("Peça resolvida: " + img.split("/").pop(), "ok");
+      setStatus("Peca resolvida: " + img.split("/").pop(), "ok");
     } catch(err){ setStatus("Erro extraindo imagem: " + err.message, "err"); }
   }, 500);
 });
+
+let progressInterval = null;
+function startFakeProgress(){
+  let p = 5;
+  setBar(p);
+  if (progressInterval) clearInterval(progressInterval);
+  progressInterval = setInterval(() => {
+    p = Math.min(95, p + 1.5);
+    setBar(p);
+  }, 700);
+}
+function stopProgress(final=100){
+  if (progressInterval) clearInterval(progressInterval);
+  progressInterval = null;
+  setBar(final);
+}
 
 $("#btnGo").addEventListener("click", async ()=>{
   if (!personState.dataUri){ setStatus("Falta a foto da pessoa.", "err"); return; }
   if (!garmentState.url){ setStatus("Falta a URL do produto.", "err"); return; }
   $("#btnGo").disabled = true;
-  setStatus("Enviando..."); setBar(5);
+  setStatus("Gerando (~20-40s)..."); startFakeProgress();
   try {
     const r = await fetch(API + "/tryon", {
       method:"POST", headers:{"Content-Type":"application/json"},
       body: JSON.stringify({
         person_image: personState.dataUri,
         garment_image_url: garmentState.url,
-        garment_description: $("#garmentDesc").value.trim() || "shirt",
+        garment_description: $("#garmentDesc").value.trim() || "esta peca de roupa",
+        quality: $("#quality").value,
       }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
-    setStatus("Iniciado · id " + data.id); setBar(15);
-    let tries=0;
-    while (tries < 60){
-      await new Promise(res => setTimeout(res, 2500));
-      tries++;
-      const pr = await fetch(API + "/tryon/" + data.id);
-      const pd = await pr.json();
-      setBar(Math.min(95, 15 + tries*4));
-      setStatus(`Status: ${pd.status} · ${tries}`);
-      if (pd.status === "succeeded"){
-        setBar(100); setStatus("Pronto.", "ok");
-        setPreview($("#prevResult"), pd.output);
-        return;
-      }
-      if (["failed","canceled"].includes(pd.status)){
-        throw new Error(pd.error || ("prediction " + pd.status));
-      }
-    }
-    throw new Error("timeout");
-  } catch(e){ setStatus("Erro: " + e.message, "err"); setBar(0); }
+    stopProgress(100);
+    setStatus("Pronto.", "ok");
+    setPreview($("#prevResult"), "data:image/jpeg;base64," + data.image_b64);
+  } catch(e){ stopProgress(0); setStatus("Erro: " + e.message, "err"); }
   finally { $("#btnGo").disabled = false; }
 });
 </script>
