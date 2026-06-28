@@ -50,13 +50,22 @@ def tryon_create():
     size = body.get("size") or "1024x1024"     # 1024x1024 | 1024x1536 | 1536x1024
 
     # auto-detecta categoria pela descricao se nao for fornecida
+    # ordem: peca > tecido. "jaqueta jeans" vence sobre "jeans" sozinho.
     category = body.get("category")
     if not category:
         dlow = desc.lower()
-        if any(w in dlow for w in ["calca", "calça", "short", "bermuda", "jeans", "saia", "saint", "leggin"]):
-            category = "lower_body"
-        elif any(w in dlow for w in ["vestido", "macacao", "macacão"]):
+        upper_keys = ["jaqueta", "casaco", "blazer", "camisa", "camiseta", "blusa", "regata", "polo",
+                      " top ", "cropped", "moletom", "sueter", "suéter", "tricot", "cardigan",
+                      "colete", "coat", "hoodie", "shirt", "tee", "jacket"]
+        lower_keys = ["calca", "calça", "short", "bermuda", "saia", "legging", "pant", "trouser",
+                      "jeans"]  # jeans aqui so como fallback se nao tiver upper_key antes
+        dress_keys = ["vestido", "dress", "macacao", "macacão", "jumpsuit", "macaquinho"]
+        if any(w in dlow for w in dress_keys):
             category = "dresses"
+        elif any(w in dlow for w in upper_keys):
+            category = "upper_body"
+        elif any(w in dlow for w in lower_keys):
+            category = "lower_body"
         else:
             category = "upper_body"
 
@@ -191,7 +200,22 @@ def resolve_product():
                     hd = hd_candidate
             except Exception:
                 pass
-        return jsonify({"image_url": img, "image_url_hd": hd})
+        # detecta categoria pela URL + titulo. ordem: peca > tecido.
+        ulow = (url + " " + html[:5000]).lower()
+        upper_keys = ["jaqueta", "casaco", "blazer", "camisa", "camiseta", "blusa", "regata", "polo",
+                      "cropped", "moletom", "sueter", "suéter", "tricot", "cardigan", "colete",
+                      "coat", "hoodie", "shirt", "tee", "jacket", "/top-", "/tops-", "-top-"]
+        lower_keys = ["calca", "calça", "short", "bermuda", "saia", "legging", "pant", "trouser", "jeans"]
+        dress_keys = ["vestido", "dress", "macacao", "macacão", "jumpsuit", "macaquinho"]
+        if any(w in ulow for w in dress_keys):
+            suggested = "dresses"
+        elif any(w in ulow for w in upper_keys):
+            suggested = "upper_body"
+        elif any(w in ulow for w in lower_keys):
+            suggested = "lower_body"
+        else:
+            suggested = "upper_body"
+        return jsonify({"image_url": img, "image_url_hd": hd, "suggested_category": suggested})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -319,7 +343,12 @@ $("#productPage").addEventListener("input", e=>{
       const img = d.image_url_hd || d.image_url;
       garmentState.url = img;
       setPreview($("#prevGarment"), img);
-      setStatus("Peca resolvida: " + img.split("/").pop(), "ok");
+      // se categoria estava em "auto", aplica a sugestao do backend
+      if ($("#category").value === "auto" && d.suggested_category) {
+        garmentState.suggestedCategory = d.suggested_category;
+      }
+      const catNote = d.suggested_category ? ` (categoria detectada: ${d.suggested_category})` : "";
+      setStatus("Peca resolvida: " + img.split("/").pop() + catNote, "ok");
     } catch(err){ setStatus("Erro extraindo imagem: " + err.message, "err"); }
   }, 500);
 });
@@ -353,7 +382,7 @@ $("#btnGo").addEventListener("click", async ()=>{
         garment_image_url: garmentState.url,
         garment_description: $("#garmentDesc").value.trim() || "esta peca de roupa",
         quality: $("#quality").value,
-        category: ($("#category").value === "auto" ? null : $("#category").value),
+        category: ($("#category").value === "auto" ? (garmentState.suggestedCategory || null) : $("#category").value),
       }),
     });
     const data = await r.json();
