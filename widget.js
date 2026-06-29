@@ -15,6 +15,49 @@
   var BRAND_EMOJI = '👗';
 
   // ============================================================
+  // Mount point: tenta achar onde plantar o botao inline.
+  // SaaS-ready: lista priorizada cobre Nuvemshop/Shopify/Woo/Magento.
+  // Cliente pode override via <script data-mount="..."> no bootstrap.
+  // Fallback: botao flutuante (nao quebra se nenhum seletor bater).
+  // ============================================================
+  // FOCO INICIAL: Nuvemshop. Outras plataformas como fallback opcional.
+  // Quando expandirmos pra Shopify/Woo, otimizar seletores específicos.
+  var MOUNT_SELECTORS = [
+    // 0) override do cliente, se passou data-mount no bootstrap (SaaS-ready)
+    null,
+    // === Nuvemshop (foco inicial — temas Idea/Trend/Atlantic/Avenida) ===
+    '.js-add-to-cart-form',
+    '.js-add-cart-form',
+    '[data-store="product-form"]',
+    '.product-form-section',
+    '.product-info .product-form',
+    '.product-buy',
+    '.js-product-buy',
+    '#form_buy',
+    '.product-actions',
+    // === Outras plataformas (fallback opcional pra expansão futura) ===
+    '[data-product-form]',
+    'form[action*="/cart/add"]',
+    'form.cart',
+    '.product-add-form',
+    // === Genéricos (último recurso) ===
+    '[class*="add-to-cart"]',
+    '[class*="addToCart"]'
+  ];
+  function findMountPoint() {
+    // 1) override via data-mount no <script> que carregou o widget
+    var ownScript = document.querySelector('script[src*="martina-tryon.onrender.com/widget.js"], script[data-tryon-mount]');
+    var override = ownScript && ownScript.getAttribute('data-mount');
+    if (override) MOUNT_SELECTORS[0] = override;
+    for (var i = 0; i < MOUNT_SELECTORS.length; i++) {
+      if (!MOUNT_SELECTORS[i]) continue;
+      var el = document.querySelector(MOUNT_SELECTORS[i]);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  // ============================================================
   // GATE: so ativa em modo teste por enquanto
   // ============================================================
   function isTestMode() {
@@ -172,12 +215,17 @@
   // UI — botao + modal em Shadow DOM (isolado do tema da loja)
   // ============================================================
   var STYLES = (
-    ':host{all:initial;font-family:-apple-system,system-ui,sans-serif;}' +
+    ':host{all:initial;font-family:-apple-system,system-ui,sans-serif;display:block;}' +
+    ':host([data-mode="inline"]){width:100%;margin:16px 0;}' +
     '*{box-sizing:border-box}' +
-    '.btn{position:fixed;bottom:90px;right:20px;z-index:99998;background:#111;color:#fff;border:0;border-radius:999px;padding:13px 20px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.25);font-weight:600;display:flex;align-items:center;gap:8px}' +
-    '@media(max-width:760px){.btn{bottom:80px;right:14px;padding:11px 16px;font-size:12px}}' +
-    '.btn:hover{transform:translateY(-2px)}' +
-    '.btn .emoji{font-size:18px}' +
+    // INLINE (default quando achou mount point): full-width, branco com borda preta — nao compete com CTA "Comprar"
+    '.btn{width:100%;background:#fff;color:#111;border:1.5px solid #111;border-radius:4px;padding:14px 22px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;font-weight:700;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s}' +
+    '.btn:hover{background:#111;color:#fff}' +
+    // FLOATING (fallback quando nao achou mount): bola escura no canto
+    ':host([data-mode="floating"]) .btn{position:fixed;bottom:90px;right:20px;width:auto;z-index:99998;background:#111;color:#fff;border:0;border-radius:999px;padding:13px 20px;font-size:13px;letter-spacing:.08em;box-shadow:0 10px 30px rgba(0,0,0,.25);font-weight:600;justify-content:flex-start}' +
+    ':host([data-mode="floating"]) .btn:hover{background:#111;color:#fff;transform:translateY(-2px)}' +
+    '@media(max-width:760px){:host([data-mode="floating"]) .btn{bottom:80px;right:14px;padding:11px 16px;font-size:12px}}' +
+    '.btn .emoji{font-size:16px}' +
     '.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;align-items:center;justify-content:center;padding:16px;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}' +
     '.overlay.show{display:flex}' +
     '.modal{background:#fff;width:100%;max-width:980px;max-height:92vh;border-radius:18px;display:flex;flex-direction:column;overflow:hidden}' +
@@ -262,8 +310,24 @@
     // host element + Shadow DOM
     var host = document.createElement('div');
     host.id = 'tryon-host';
-    host.style.all = 'initial';
-    document.body.appendChild(host);
+
+    // Decide modo: inline (achou mount) ou floating (fallback)
+    var mount = findMountPoint();
+    var ownScript = document.querySelector('script[src*="martina-tryon.onrender.com/widget.js"], script[data-tryon-mount]');
+    var positionPref = (ownScript && ownScript.getAttribute('data-position')) || 'beforebegin'; // beforebegin = ANTES do mount (cima do "Comprar")
+    if (mount) {
+      host.setAttribute('data-mode', 'inline');
+      try {
+        mount.insertAdjacentElement(positionPref, host);
+      } catch (e) {
+        document.body.appendChild(host);
+        host.setAttribute('data-mode', 'floating');
+      }
+    } else {
+      host.setAttribute('data-mode', 'floating');
+      document.body.appendChild(host);
+    }
+
     var root = host.attachShadow({ mode: 'open' });
     root.innerHTML = TPL;
 
@@ -278,7 +342,7 @@
 
     function setPreview(el, src) { el.innerHTML = '<img src="' + src + '" alt="">'; }
     function setStatus(msg, cls) {
-      var s = $('#status'); s.textContent = msg; s.className = 'status' + (cls ? ' ' + cls : '');
+      var s = $('#status'); s.textContent = msg; s.className = 'status' + (cls ? ' ' + cls : '';
     }
     function setBar(p) { $('#bar').style.width = Math.max(0, Math.min(100, p)) + '%'; }
     function progress(start) {
