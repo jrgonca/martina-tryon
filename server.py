@@ -220,6 +220,30 @@ def resolve_product():
         return jsonify({"error": str(e)}), 500
 
 # ---------------------------------------------------------
+# /widget.js — serve o widget pra Martina (e futuras lojas)
+# Carregado pelo bootstrap nos Codigos Externos da Nuvemshop.
+# ---------------------------------------------------------
+_WIDGET_CACHE = {"text": None}
+def _read_widget():
+    if _WIDGET_CACHE["text"] is None:
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            with open(os.path.join(here, "widget.js"), "r", encoding="utf-8") as f:
+                _WIDGET_CACHE["text"] = f.read()
+        except Exception as e:
+            _WIDGET_CACHE["text"] = "/* widget.js missing: " + str(e) + " */"
+    return _WIDGET_CACHE["text"]
+
+@app.route("/widget.js", methods=["GET"])
+def widget_js():
+    body = _read_widget()
+    return Response(body, mimetype="application/javascript; charset=utf-8",
+                    headers={
+                        "Cache-Control": "public, max-age=300",
+                        "Access-Control-Allow-Origin": "*",
+                    })
+
+# ---------------------------------------------------------
 # /test — pagina HTML hospedada
 # ---------------------------------------------------------
 TEST_HTML = r"""<!doctype html>
@@ -343,7 +367,6 @@ $("#productPage").addEventListener("input", e=>{
       const img = d.image_url_hd || d.image_url;
       garmentState.url = img;
       setPreview($("#prevGarment"), img);
-      // se categoria estava em "auto", aplica a sugestao do backend
       if ($("#category").value === "auto" && d.suggested_category) {
         garmentState.suggestedCategory = d.suggested_category;
       }
