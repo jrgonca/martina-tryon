@@ -112,16 +112,21 @@
   // Backend call
   // ============================================================
   function callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription) {
+    // timeout 150s — se backend nao retornar em 2.5min, falha em vez de pendurar
+    var ctl = ('AbortController' in window) ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function(){ ctl.abort(); }, 150000) : null;
     return fetch(API_URL + '/tryon', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: ctl ? ctl.signal : undefined,
       body: JSON.stringify({
         person_image: personDataUri,
         garment_image_url: garmentImageUrl,
         garment_description: garmentDescription,
-        quality: 'high',
+        quality: 'medium',  // medium = ~60s e ~R$1; high seria 90s+. UX ganha
       }),
     }).then(function (r) {
+      if (timer) clearTimeout(timer);
       return r.json().then(function (d) {
         if (!r.ok) {
           var err = new Error(d.error || 'Erro ' + r.status);
@@ -130,6 +135,14 @@
         }
         return d;
       });
+    }, function(e){
+      if (timer) clearTimeout(timer);
+      if (e && e.name === 'AbortError') {
+        var te = new Error('Timeout — a IA demorou demais. Tenta de novo.');
+        te.status = 0;
+        throw te;
+      }
+      throw e;
     });
   }
   function callTryOn(personDataUri, productUrl, garmentImageUrl, garmentDescription) {
@@ -279,6 +292,8 @@
     $('#trigger').addEventListener('click', function () {
       track('open', { product: state.garmentInfo && state.garmentInfo.name });
       $('#overlay').classList.add('show');
+      // pre-warm backend (evita cold start no PROVAR)
+      try { fetch(API_URL + '/', { method: 'GET', cache: 'no-store' }).catch(function(){}); } catch(e){}
       // resolve peça quando abre o modal (lazy)
       if (!state.garmentUrl) loadGarment();
     });
@@ -385,7 +400,15 @@
       }
 
       $('#go').disabled = true;
-      setStatus('Gerando (15–35s)…'); progress(true);
+      setStatus('Gerando — pode levar 1 a 2 minutos…'); progress(true);
+      // pulso de mensagens pra usuario nao desistir
+      var msgs = ['Analisando sua foto…','Identificando a peça…','Ajustando proporções…','Renderizando o resultado…','Quase lá, é a IA capricha…'];
+      var msgIx = 0;
+      var msgTimer = setInterval(function(){
+        msgIx = (msgIx + 1) % msgs.length;
+        setStatus(msgs[msgIx]);
+      }, 12000);
+      state._msgTimer = msgTimer;
       track('generate', { product: state.garmentInfo && state.garmentInfo.name });
       try {
         var d = await callTryOn(
@@ -394,13 +417,13 @@
           state.garmentUrl,
           state.garmentInfo && state.garmentInfo.name
         );
-        clearInterval(state.progressInterval); setBar(100);
+        clearInterval(state.progressInterval); clearInterval(state._msgTimer); setBar(100);
         setPreview($('#pvResult'), 'data:image/jpeg;base64,' + d.image_b64);
         setStatus('Pronto.', 'ok');
         setCached(state.personHash, state.garmentUrl, d.image_b64);
         track('result', { cached: false });
       } catch (e) {
-        clearInterval(state.progressInterval); setBar(0);
+        clearInterval(state.progressInterval); clearInterval(state._msgTimer); setBar(0);
         setStatus('Erro: ' + e.message, 'err');
         track('error', { message: e.message });
       } finally {
