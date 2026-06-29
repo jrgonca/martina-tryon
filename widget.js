@@ -173,12 +173,16 @@ var STYLES = (
 '.head button{background:none;border:0;font-size:28px;cursor:pointer;color:#666;line-height:1;padding:0 4px;-webkit-tap-highlight-color:transparent}' +
 '.body{padding:14px;overflow:auto;flex:1;-webkit-overflow-scrolling:touch}' +
 '@media(min-width:761px){.body{padding:22px}}' +
-'.grid{display:grid;grid-template-columns:1fr;gap:12px}' +
-'@media(min-width:761px){.grid{grid-template-columns:1fr 1fr;gap:18px}}' +
+'.grid{display:grid;grid-template-columns:1fr;gap:12px;max-width:520px;margin:0 auto}' +
+'@media(min-width:761px){.grid{gap:18px}}' +
+'#cardResult{display:none}' +
+'.modal[data-step="result"] #cardPerson{display:none}' +
+'.modal[data-step="result"] #cardResult{display:block}' +
+'.modal[data-step="result"] #goRow{display:none}' +
 '.card{background:#fafafa;border:1px solid #eee;border-radius:12px;padding:14px}' +
 '.card h3{margin:0 0 12px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#666;font-weight:700}' +
-'.preview{aspect-ratio:4/5;background:#f0f0f0;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
-'@media(min-width:761px){.preview{aspect-ratio:3/4}}' +
+'.preview{aspect-ratio:3/4;max-height:45vh;background:#f0f0f0;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
+'@media(min-width:761px){.preview{aspect-ratio:3/4;max-height:none}}' +
 '.preview img{width:100%;height:100%;object-fit:cover}' +
 '.preview .empty{color:#999;font-size:13px;text-align:center;padding:24px;line-height:1.5}' +
 '.controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}' +
@@ -193,6 +197,9 @@ var STYLES = (
 '.go:disabled{opacity:.35;cursor:not-allowed}' +
 '.bar{height:3px;background:#eee;overflow:hidden;border-radius:99px;margin-top:10px}' +
 '.bar>div{height:100%;background:#111;width:0;transition:width .3s}' +
+'.status-inline{font-size:13px;color:#666;margin-top:14px;text-align:center;font-family:ui-monospace,monospace;min-height:18px}' +
+'.status-inline.err{color:#dc2626}' +
+'.status-inline.ok{color:#059669}' +
 '.meta{font-size:10px;color:#999;margin-top:14px;text-align:center;letter-spacing:.06em;line-height:1.5}' +
 '#camera{display:none;width:100%;border-radius:10px;background:#000}' +
 '.snap{margin-top:12px;display:none;text-align:center}' +
@@ -226,8 +233,9 @@ var TPL = (
 '</div>' +
 '</div>' +
 '<div class="card" id="cardResult">' +
-'<h3>Como ficaria</h3>' +
-'<div class="preview" id="pvResult"><div class="empty">Aperte PROVAR</div></div>' +
+'<h3>Como ficaria em você</h3>' +
+'<div class="preview" id="pvResult"><div class="empty">Gerando…</div></div>' +
+'<div class="status-inline" id="statusResult">Analisando sua foto…</div>' +
 '<div class="bar"><div id="bar"></div></div>' +
 '<div class="result-actions" id="resultActions">' +
 '<button class="btn-buy" id="buyBtn">COMPRAR</button>' +
@@ -237,7 +245,7 @@ var TPL = (
 '</div>' +
 '<div class="meta">Resultado gerado por IA. Cores e detalhes finos podem variar do produto real.</div>' +
 '</div>' +
-'<div class="cta-row">' +
+'<div class="cta-row" id="goRow">' +
 '<div class="status" id="status">Pronto.</div>' +
 '<button class="go" id="go" disabled>PROVAR</button>' +
 '</div>' +
@@ -277,6 +285,12 @@ progressInterval: null,
 function setPreview(el, src) { el.innerHTML = '<img src="' + src + '" alt="">'; }
 function setStatus(msg, cls) {
 var s = $('#status'); s.textContent = msg; s.className = 'status' + (cls ? ' ' + cls : '');
+var s2 = $('#statusResult'); if (s2) { s2.textContent = msg; s2.className = 'status-inline' + (cls ? ' ' + cls : ''); }
+}
+var modalEl = root.querySelector('.modal');
+function goToStep(step) {
+if (step) modalEl.setAttribute('data-step', step);
+else modalEl.removeAttribute('data-step');
 }
 function setBar(p) { $('#bar').style.width = Math.max(0, Math.min(100, p)) + '%'; }
 function progress(start) {
@@ -288,6 +302,7 @@ function updateGoButton() { $('#go').disabled = !(state.personDataUri && state.g
 $('#trigger').addEventListener('click', function () {
 track('open', { product: state.garmentInfo && state.garmentInfo.name });
 $('#overlay').classList.add('show');
+goToStep(null);
 try { fetch(API_URL + '/', { method: 'GET', cache: 'no-store' }).catch(function(){}); } catch(e){}
 if (!state.garmentUrl) loadGarment();
 });
@@ -385,8 +400,9 @@ setTimeout(scrollToBuy, 320);
 });
 $('#retryBtn').addEventListener('click', function () {
 track('retry');
+goToStep(null);
 $('#resultActions').classList.remove('show');
-$('#pvResult').innerHTML = '<div class="empty">Aperte PROVAR</div>';
+$('#pvResult').innerHTML = '<div class="empty">Gerando…</div>';
 setBar(0);
 setStatus('Pronto pra testar de novo.', 'ok');
 $('#go').disabled = !(state.personDataUri && state.garmentUrl);
@@ -403,6 +419,7 @@ track('result', { cached: true });
 return;
 }
 $('#go').disabled = true;
+goToStep('result');
 setStatus('Gerando — pode levar 1 a 2 minutos…'); progress(true);
 var msgs = ['Analisando sua foto…','Identificando a peça…','Ajustando proporções…','Renderizando o resultado…','Quase lá, é a IA capricha…'];
 var msgIx = 0;
@@ -427,7 +444,8 @@ setCached(state.personHash, state.garmentUrl, d.image_b64);
 track('result', { cached: false });
 } catch (e) {
 clearInterval(state.progressInterval); clearInterval(state._msgTimer); setBar(0);
-setStatus('Erro: ' + e.message, 'err');
+goToStep(null);
+setStatus('Erro: ' + e.message + ' — tenta de novo', 'err');
 track('error', { message: e.message });
 } finally {
 $('#go').disabled = false;
