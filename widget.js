@@ -3,7 +3,8 @@
 if (window.TryOn && window.TryOn._loaded) return;
 var API_URL = 'https://martina-tryon.onrender.com';
 var BRAND_LABEL = 'Provar virtualmente';
-var BRAND_EMOJI = '👗';
+// Ícone de cabide minimalista (line-art) — currentColor pra herdar a cor do botão.
+var BRAND_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 12V9.5a2 2 0 1 1 3-1.732"/><path d="M12 12 3.5 18.2A.5.5 0 0 0 3.8 19h16.4a.5.5 0 0 0 .3-.8L12 12z"/></svg>';
 var MOUNT_SELECTORS = [
 null,
 '.js-addtocart',
@@ -216,7 +217,8 @@ var STYLES = (
 ':host([data-mode="floating"]) .btn{position:fixed;bottom:90px;right:20px;width:auto;z-index:99998;background:#111;color:#fff;border:0;border-radius:999px;padding:13px 20px;font-size:13px;letter-spacing:.08em;box-shadow:0 10px 30px rgba(0,0,0,.25);font-weight:600;justify-content:flex-start}' +
 ':host([data-mode="floating"]) .btn:hover{background:#111;color:#fff;transform:translateY(-2px)}' +
 '@media(max-width:760px){:host([data-mode="floating"]) .btn{bottom:80px;right:14px;padding:11px 16px;font-size:12px}}' +
-'.btn .emoji{font-size:16px}' +
+'.btn .icon{width:18px;height:18px;display:inline-flex;align-items:center;flex-shrink:0}' +
+'.btn .icon svg{width:100%;height:100%;display:block}' +
 '.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}' +
 '.overlay.show{display:flex}' +
 '.modal{background:#fff;width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden}' +
@@ -268,7 +270,7 @@ var STYLES = (
 var TPL = (
 '<style>' + STYLES + '</style>' +
 '<button class="btn" id="trigger" aria-label="' + BRAND_LABEL + '">' +
-'<span class="emoji">' + BRAND_EMOJI + '</span><span>' + BRAND_LABEL + '</span>' +
+'<span class="icon">' + BRAND_ICON + '</span><span>' + BRAND_LABEL + '</span>' +
 '</button>' +
 '<div class="overlay" id="overlay">' +
 '<div class="modal" role="dialog" aria-label="Provador virtual">' +
