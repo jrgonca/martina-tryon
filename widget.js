@@ -94,11 +94,19 @@ function uuid(){ try { return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,func
 function getClientId(){ try { var v = localStorage.getItem('tryon_cid'); if (!v) { v = uuid(); localStorage.setItem('tryon_cid', v); } return v; } catch(e){ return ''; } }
 function getSessionId(){ try { var v = sessionStorage.getItem('tryon_sid'); if (!v) { v = uuid(); sessionStorage.setItem('tryon_sid', v); } return v; } catch(e){ return ''; } }
 function markProvado(name, url){
+// localStorage com TTL 24h — atravessa subdominio (checkout/thank-you da Nuvemshop)
+// e cobre quem prova hoje e compra hoje mesmo em sessao nova.
 try {
-var key='tryon_provados', arr = JSON.parse(sessionStorage.getItem(key)||'[]');
-arr.push({name:(name||'').slice(0,200), url:(url||'').slice(0,500), ts:Date.now()});
+var key='tryon_provados';
+var TTL = 24 * 3600 * 1000;
+var now = Date.now();
+var arr = [];
+try { arr = JSON.parse(localStorage.getItem(key)||'[]'); } catch(e) {}
+// purga expirados
+arr = arr.filter(function(it){ return (now - (it.ts||0)) < TTL; });
+arr.push({name:(name||'').slice(0,200), url:(url||'').slice(0,500), ts:now});
 if (arr.length > 50) arr = arr.slice(-50);
-sessionStorage.setItem(key, JSON.stringify(arr));
+localStorage.setItem(key, JSON.stringify(arr));
 } catch(e) {}
 }
 // _ANALYTICS_CTX é populado pelo init() — guarda referencia ao state do widget
@@ -281,7 +289,7 @@ var TPL = (
 '<div class="status-inline" id="statusResult">Analisando sua foto…</div>' +
 '<div class="bar"><div id="bar"></div></div>' +
 '<div class="result-actions" id="resultActions">' +
-'<button class="btn-buy" id="buyBtn">COMPRAR</button>' +
+'<button class="btn-buy" id="buyBtn">IR PRA COMPRA</button>' +
 '<button class="btn-retry" id="retryBtn">↻ Testar novamente</button>' +
 '</div>' +
 '</div>' +
@@ -447,6 +455,10 @@ setStatus('Não consegui carregar a peça', 'err');
 });
 }
 function scrollToBuy() {
+// Estrategia: scrolla + highlight pro user ver onde esta o COMPRAR nativo da loja.
+// NAO clica auto pra nao gerar pedido sem tamanho/cor escolhidos (UX ruim, devolucao).
+// Auto-click eh tentado SO se houver UM unico botao Comprar e UM unico tamanho disponivel
+// (caso raro, mas seguro de automatizar).
 var target = findMountPoint();
 if (!target) return;
 try {
@@ -455,6 +467,18 @@ var orig = target.style.cssText;
 target.style.transition = 'box-shadow .4s';
 target.style.boxShadow = '0 0 0 4px rgba(255,200,0,.6)';
 setTimeout(function(){ target.style.cssText = orig; }, 1600);
+} catch(e) {}
+// Tenta auto-click APENAS se nao tem variantes a escolher (1 tamanho, 1 cor)
+try {
+var sizeSelects = document.querySelectorAll('select[name*="size" i], select[name*="tamanho" i], .js-product-variants select');
+var hasUnselectedSize = false;
+sizeSelects.forEach(function(s){ if (s && s.options.length > 1 && !s.value) hasUnselectedSize = true; });
+if (hasUnselectedSize) return; // user precisa escolher manualmente
+// se chegou aqui: nao tem tamanho a escolher OU ja esta selecionado
+var nativeBuy = document.querySelector('button[name=add-cart], .js-add-to-cart-button, .koba-add, .js-addtocart');
+if (nativeBuy && !nativeBuy.disabled) {
+  setTimeout(function(){ try { nativeBuy.click(); } catch(e){} }, 800);
+}
 } catch(e) {}
 }
 $('#buyBtn').addEventListener('click', function () {

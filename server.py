@@ -60,6 +60,8 @@ def _init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_ts ON events(tenant, ts)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, ts)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(tenant, event_type, ts)")
+        # idempotencia: lookup rapido por (tenant, event_type, order_id) p/ dedup purchase_attributed
+        c.execute("CREATE INDEX IF NOT EXISTS idx_events_order ON events(tenant, event_type, order_id)")
 _init_db()
 
 # Tipos de evento aceitos (defesa contra spam de campo livre)
@@ -653,6 +655,20 @@ def post_event():
     except Exception:
         order_value = 0
     meta = _meta_sanitize(body.get("meta"))
+    order_id_raw = (body.get("order_id") or "")[:64]
+    # IDEMPOTENCIA: purchase_attributed com mesmo order_id nao duplica.
+    # Snippet pode disparar 2x (polling repete) — backend protege.
+    if ev == "purchase_attributed" and order_id_raw:
+        try:
+            with _DB_LOCK, _db() as c:
+                exists = c.execute(
+                    "SELECT 1 FROM events WHERE tenant=? AND event_type='purchase_attributed' AND order_id=? LIMIT 1",
+                    (tenant, order_id_raw)
+                ).fetchone()
+                if exists:
+                    return jsonify({"ok": True, "dedup": True}), 200
+        except Exception:
+            pass  # se falhar o check, segue insercao normal (vale a perda eventual de idempotencia)
     try:
         with _DB_LOCK, _db() as c:
             c.execute("""
@@ -668,7 +684,7 @@ def post_event():
                 (body.get("product_url") or "")[:500],
                 (body.get("product_name") or "")[:200],
                 (body.get("garment_category") or "")[:32],
-                (body.get("order_id") or "")[:64],
+                order_id_raw,
                 order_value,
                 time.time(),
                 _client_ip(),
