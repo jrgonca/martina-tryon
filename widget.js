@@ -314,7 +314,7 @@ if (!isProductPage()) return;
 var host = document.createElement('div');
 host.id = 'tryon-host';
 var mount = findMountPoint();
-var positionPref = (OWN_SCRIPT && OWN_SCRIPT.getAttribute('data-position')) || 'beforebegin';
+var positionPref = (OWN_SCRIPT && OWN_SCRIPT.getAttribute('data-position')) || 'afterend';
 if (mount) {
 host.setAttribute('data-mode', 'inline');
 try {
