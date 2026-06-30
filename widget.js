@@ -130,7 +130,9 @@ if (extra) Object.assign(payload, extra);
 var body = JSON.stringify(payload);
 var url = API_URL + '/event';
 if (navigator.sendBeacon) {
-navigator.sendBeacon(url, new Blob([body], {type:'application/json'}));
+// text/plain evita CORS preflight (que estava falhando silenciosamente).
+// Backend aceita qualquer Content-Type via request.get_data(as_text=True).
+navigator.sendBeacon(url, new Blob([body], {type:'text/plain'}));
 } else {
 fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body, keepalive:true, mode:'cors'}).catch(function(){});
 }
@@ -304,7 +306,10 @@ var TPL = (
 '</div>'
 );
 function init() {
-if (!isTestMode()) return;
+// SOFT-LAUNCH AGRESSIVO: gate ?mtryon=1 removido — widget aparece pra todas as visitantes.
+// IP rate limit (10/min, 60/h em /tryon) + origin allowlist protegem custo OpenAI.
+// Pra reverter rapidamente: descomentar a linha abaixo.
+// if (!isTestMode()) return;
 if (!isProductPage()) return;
 var host = document.createElement('div');
 host.id = 'tryon-host';
