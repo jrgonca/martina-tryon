@@ -28,8 +28,7 @@ null,
 '[class*="addToCart"]'
 ];
 function findMountPoint() {
-var ownScript = document.querySelector('script[src*="martina-tryon.onrender.com/widget.js"], script[data-tryon-mount]');
-var override = ownScript && ownScript.getAttribute('data-mount');
+var override = OWN_SCRIPT && OWN_SCRIPT.getAttribute('data-mount');
 if (override) MOUNT_SELECTORS[0] = override;
 for (var i = 0; i < MOUNT_SELECTORS.length; i++) {
 if (!MOUNT_SELECTORS[i]) continue;
@@ -41,11 +40,15 @@ return null;
 function isTestMode() {
 var qs = new URLSearchParams(location.search);
 if (qs.get('mtryon') === '1') {
-document.cookie = 'mtryon=1; max-age=2592000; path=/';
+document.cookie = 'mtryon=1; max-age=2592000; path=/; SameSite=Lax';
 return true;
 }
 return document.cookie.indexOf('mtryon=1') >= 0;
 }
+var OWN_SCRIPT = document.currentScript || (function(){
+var ss = document.querySelectorAll('script[data-tryon],script[src*="widget.js"]');
+return ss[ss.length - 1] || null;
+})();
 function isProductPage() {
 return /\/produtos\/[^/?#]+\/?/.test(location.pathname);
 }
@@ -73,6 +76,7 @@ function cacheKey(personHash, garmentUrl) { return 'tryon_' + personHash + '_' +
 function getCached(personHash, garmentUrl) { try { return sessionStorage.getItem(cacheKey(personHash, garmentUrl)); } catch (e) { return null; } }
 function setCached(personHash, garmentUrl, b64) { try { sessionStorage.setItem(cacheKey(personHash, garmentUrl), b64); } catch (e) {} }
 function rateLimitOk() {
+if (document.cookie.indexOf('mtryon=1') >= 0) return true;
 try {
 var key = 'tryon_rl_' + new Date().toISOString().slice(0, 10);
 var n = parseInt(sessionStorage.getItem(key) || '0', 10);
@@ -103,8 +107,8 @@ img.onerror = rej;
 img.src = URL.createObjectURL(file);
 });
 }
-function callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription) {
-var ctl = ('AbortController' in window) ? new AbortController() : null;
+function callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription, externalCtl) {
+var ctl = externalCtl || (('AbortController' in window) ? new AbortController() : null);
 var timer = ctl ? setTimeout(function(){ ctl.abort(); }, 150000) : null;
 return fetch(API_URL + '/tryon', {
 method: 'POST',
@@ -136,12 +140,13 @@ throw te;
 throw e;
 });
 }
-function callTryOn(personDataUri, productUrl, garmentImageUrl, garmentDescription) {
-return callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription).catch(function (e) {
+function callTryOn(personDataUri, productUrl, garmentImageUrl, garmentDescription, externalCtl) {
+return callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription, externalCtl).catch(function (e) {
+if (externalCtl && externalCtl.signal && externalCtl.signal.aborted) throw e;
 var transient = !e.status || (e.status >= 500 && e.status < 600);
 if (!transient) throw e;
 return new Promise(function (res) { setTimeout(res, 2500); })
-.then(function () { return callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription); });
+.then(function () { return callTryOnOnce(personDataUri, garmentImageUrl, garmentDescription, externalCtl); });
 });
 }
 function resolveProductIfNeeded(currentImageUrl) {
@@ -164,37 +169,53 @@ var STYLES = (
 ':host([data-mode="floating"]) .btn:hover{background:#111;color:#fff;transform:translateY(-2px)}' +
 '@media(max-width:760px){:host([data-mode="floating"]) .btn{bottom:80px;right:14px;padding:11px 16px;font-size:12px}}' +
 '.btn .emoji{font-size:16px}' +
-'.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;align-items:center;justify-content:center;padding:16px;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}' +
+'.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99999;align-items:center;justify-content:center;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}' +
 '.overlay.show{display:flex}' +
-'.modal{background:#fff;width:100%;max-width:980px;max-height:92vh;border-radius:18px;display:flex;flex-direction:column;overflow:hidden}' +
-'.head{padding:18px 22px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between}' +
-'.head h2{margin:0;font-size:14px;letter-spacing:.2em;font-weight:700;text-transform:uppercase}' +
-'.head button{background:none;border:0;font-size:24px;cursor:pointer;color:#666;line-height:1}' +
-'.body{padding:22px;overflow:auto}' +
-'.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}' +
-'@media(max-width:760px){.grid{grid-template-columns:1fr}}' +
+'.modal{background:#fff;width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden}' +
+'@media(min-width:761px){.overlay{padding:24px}.modal{max-width:920px;height:auto;max-height:92vh;border-radius:18px}}' +
+'.head{padding:16px 18px;border-bottom:1px solid #eee;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}' +
+'.head h2{margin:0;font-size:13px;letter-spacing:.2em;font-weight:700;text-transform:uppercase}' +
+'.head button{background:none;border:0;font-size:28px;cursor:pointer;color:#666;line-height:1;padding:0 4px;-webkit-tap-highlight-color:transparent}' +
+'.body{padding:14px;overflow:auto;flex:1;-webkit-overflow-scrolling:touch}' +
+'@media(min-width:761px){.body{padding:22px}}' +
+'.grid{display:grid;grid-template-columns:1fr;gap:12px;max-width:520px;margin:0 auto}' +
+'@media(min-width:761px){.grid{gap:18px}}' +
+'#cardResult{display:none}' +
+'.modal[data-step="result"] #cardPerson{display:none}' +
+'.modal[data-step="result"] #cardResult{display:block}' +
+'.modal[data-step="result"] #goRow{display:none}' +
 '.card{background:#fafafa;border:1px solid #eee;border-radius:12px;padding:14px}' +
-'.card h3{margin:0 0 10px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#666;font-weight:700}' +
-'.preview{aspect-ratio:3/4;background:#f0f0f0;border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
+'.card h3{margin:0 0 12px;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:#666;font-weight:700}' +
+'.preview{aspect-ratio:3/4;max-height:45vh;background:#f0f0f0;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden}' +
+'@media(min-width:761px){.preview{aspect-ratio:3/4;max-height:none}}' +
 '.preview img{width:100%;height:100%;object-fit:cover}' +
-'.preview .empty{color:#999;font-size:12px;text-align:center;padding:18px}' +
-'.controls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}' +
-'.btn-line{flex:1;min-width:120px;padding:10px 12px;background:#111;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:12px;letter-spacing:.1em;text-transform:uppercase;font-weight:600}' +
-'.btn-line.ghost{background:#fff;color:#111;border:1px solid #ddd}' +
+'.preview .empty{color:#999;font-size:13px;text-align:center;padding:24px;line-height:1.5}' +
+'.controls{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}' +
+'.btn-line{flex:1;min-width:130px;min-height:46px;padding:12px 14px;background:#111;color:#fff;border:0;border-radius:8px;cursor:pointer;font-size:13px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;-webkit-tap-highlight-color:transparent}' +
+'.btn-line.ghost{background:#fff;color:#111;border:1.5px solid #111}' +
 '.btn-line input{display:none}' +
-'.cta-row{padding:16px 22px;border-top:1px solid #eee;display:flex;gap:10px;align-items:center;justify-content:space-between;background:#fff}' +
-'.cta-row .status{font-size:12px;color:#666;font-family:ui-monospace,monospace;flex:1}' +
+'.cta-row{padding:14px 18px;border-top:1px solid #eee;display:flex;gap:10px;align-items:center;justify-content:space-between;background:#fff;flex-shrink:0}' +
+'.cta-row .status{font-size:12px;color:#666;font-family:ui-monospace,monospace;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}' +
 '.cta-row .status.err{color:#dc2626}' +
 '.cta-row .status.ok{color:#059669}' +
-'.go{background:#111;color:#fff;border:0;padding:14px 28px;border-radius:8px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;font-weight:700}' +
-'.go:disabled{opacity:.4;cursor:not-allowed}' +
-'.bar{height:3px;background:#eee;overflow:hidden;border-radius:99px}' +
+'.go{background:#111;color:#fff;border:0;padding:16px 28px;border-radius:10px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;font-weight:700;min-height:52px;min-width:140px;-webkit-tap-highlight-color:transparent}' +
+'.go:disabled{opacity:.35;cursor:not-allowed}' +
+'.bar{height:3px;background:#eee;overflow:hidden;border-radius:99px;margin-top:10px}' +
 '.bar>div{height:100%;background:#111;width:0;transition:width .3s}' +
-'.meta{font-size:10px;color:#999;margin-top:14px;text-align:center;letter-spacing:.06em}' +
-'#camera{display:none;width:100%;border-radius:8px}' +
-'.snap{margin-top:10px;display:none;text-align:center}' +
+'.status-inline{font-size:13px;color:#666;margin-top:14px;text-align:center;font-family:ui-monospace,monospace;min-height:18px}' +
+'.status-inline.err{color:#dc2626}' +
+'.status-inline.ok{color:#059669}' +
+'.meta{font-size:10px;color:#999;margin-top:14px;text-align:center;letter-spacing:.06em;line-height:1.5}' +
+'#camera{display:none;width:100%;border-radius:10px;background:#000}' +
+'.snap{margin-top:12px;display:none;text-align:center}' +
 '.snap.show{display:block}' +
-'.snap button{background:#fff;border:2px solid #111;color:#111;padding:10px 20px;border-radius:99px;cursor:pointer;font-weight:600;font-size:12px;letter-spacing:.1em;text-transform:uppercase}'
+'.snap button{background:#fff;border:2px solid #111;color:#111;padding:14px 28px;border-radius:99px;cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.1em;text-transform:uppercase;min-height:48px;-webkit-tap-highlight-color:transparent}' +
+'.result-actions{display:none;gap:10px;margin-top:14px;flex-direction:column}' +
+'@media(min-width:761px){.result-actions{flex-direction:row}}' +
+'.result-actions.show{display:flex}' +
+'.btn-buy{flex:1;background:#111;color:#fff;border:0;padding:16px 20px;border-radius:10px;font-size:14px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;font-weight:700;min-height:54px;-webkit-tap-highlight-color:transparent;transition:transform .15s}' +
+'.btn-buy:active{transform:scale(.97)}' +
+'.btn-retry{flex:1;background:#fff;color:#111;border:1.5px solid #111;padding:16px 20px;border-radius:10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;font-weight:600;min-height:54px;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:6px}'
 );
 var TPL = (
 '<style>' + STYLES + '</style>' +
@@ -206,9 +227,9 @@ var TPL = (
 '<div class="head"><h2>Provador Virtual</h2><button id="close" aria-label="Fechar">×</button></div>' +
 '<div class="body">' +
 '<div class="grid">' +
-'<div class="card">' +
-'<h3>1. Você</h3>' +
-'<div class="preview" id="pvPerson"><div class="empty">Sua foto de corpo inteiro</div></div>' +
+'<div class="card" id="cardPerson">' +
+'<h3>Sua foto</h3>' +
+'<div class="preview" id="pvPerson"><div class="empty">Tire ou envie uma foto de corpo inteiro, de frente</div></div>' +
 '<video id="camera" autoplay playsinline muted></video>' +
 '<div class="snap" id="snapWrap"><button id="snap">📸 Capturar</button></div>' +
 '<div class="controls">' +
@@ -216,20 +237,20 @@ var TPL = (
 '<label class="btn-line">Enviar foto<input type="file" id="filePerson" accept="image/*"></label>' +
 '</div>' +
 '</div>' +
-'<div class="card">' +
-'<h3>2. Peça</h3>' +
-'<div class="preview" id="pvGarment"><div class="empty">carregando peça…</div></div>' +
-'<div class="meta" id="garmentInfo">—</div>' +
-'</div>' +
-'<div class="card">' +
-'<h3>3. Como ficaria</h3>' +
-'<div class="preview" id="pvResult"><div class="empty">Aperte PROVAR</div></div>' +
+'<div class="card" id="cardResult">' +
+'<h3>Como ficaria em você</h3>' +
+'<div class="preview" id="pvResult"><div class="empty">Gerando…</div></div>' +
+'<div class="status-inline" id="statusResult">Analisando sua foto…</div>' +
 '<div class="bar"><div id="bar"></div></div>' +
+'<div class="result-actions" id="resultActions">' +
+'<button class="btn-buy" id="buyBtn">COMPRAR</button>' +
+'<button class="btn-retry" id="retryBtn">↻ Testar novamente</button>' +
+'</div>' +
 '</div>' +
 '</div>' +
 '<div class="meta">Resultado gerado por IA. Cores e detalhes finos podem variar do produto real.</div>' +
 '</div>' +
-'<div class="cta-row">' +
+'<div class="cta-row" id="goRow">' +
 '<div class="status" id="status">Pronto.</div>' +
 '<button class="go" id="go" disabled>PROVAR</button>' +
 '</div>' +
@@ -242,8 +263,7 @@ if (!isProductPage()) return;
 var host = document.createElement('div');
 host.id = 'tryon-host';
 var mount = findMountPoint();
-var ownScript = document.querySelector('script[src*="martina-tryon.onrender.com/widget.js"], script[data-tryon-mount]');
-var positionPref = (ownScript && ownScript.getAttribute('data-position')) || 'beforebegin';
+var positionPref = (OWN_SCRIPT && OWN_SCRIPT.getAttribute('data-position')) || 'beforebegin';
 if (mount) {
 host.setAttribute('data-mode', 'inline');
 try {
@@ -265,10 +285,28 @@ personHash: null,
 garmentUrl: null,
 garmentInfo: null,
 progressInterval: null,
+_msgTimer: null,
+_abortCtl: null,
 };
+function abortGeneration() {
+clearInterval(state.progressInterval); state.progressInterval = null;
+clearInterval(state._msgTimer); state._msgTimer = null;
+if (state._abortCtl) { try { state._abortCtl.abort(); } catch(e){} state._abortCtl = null; }
+}
+function resetResultUI() {
+$('#resultActions').classList.remove('show');
+$('#pvResult').innerHTML = '<div class="empty">Gerando…</div>';
+setBar(0);
+}
 function setPreview(el, src) { el.innerHTML = '<img src="' + src + '" alt="">'; }
 function setStatus(msg, cls) {
 var s = $('#status'); s.textContent = msg; s.className = 'status' + (cls ? ' ' + cls : '');
+var s2 = $('#statusResult'); if (s2) { s2.textContent = msg; s2.className = 'status-inline' + (cls ? ' ' + cls : ''); }
+}
+var modalEl = root.querySelector('.modal');
+function goToStep(step) {
+if (step) modalEl.setAttribute('data-step', step);
+else modalEl.removeAttribute('data-step');
 }
 function setBar(p) { $('#bar').style.width = Math.max(0, Math.min(100, p)) + '%'; }
 function progress(start) {
@@ -280,21 +318,24 @@ function updateGoButton() { $('#go').disabled = !(state.personDataUri && state.g
 $('#trigger').addEventListener('click', function () {
 track('open', { product: state.garmentInfo && state.garmentInfo.name });
 $('#overlay').classList.add('show');
+goToStep(null);
+resetResultUI();
+setStatus('Pronto.', 'ok');
 try { fetch(API_URL + '/', { method: 'GET', cache: 'no-store' }).catch(function(){}); } catch(e){}
 if (!state.garmentUrl) loadGarment();
 });
-$('#close').addEventListener('click', function () {
+function closeModal() {
 $('#overlay').classList.remove('show');
 stopCamera();
-});
+abortGeneration();
+$('#go').disabled = !(state.personDataUri && state.garmentUrl);
+}
+$('#close').addEventListener('click', closeModal);
 $('#overlay').addEventListener('click', function (e) {
-if (e.target === $('#overlay')) { $('#overlay').classList.remove('show'); stopCamera(); }
+if (e.target === $('#overlay')) closeModal();
 });
 document.addEventListener('keydown', function (e) {
-if (e.key === 'Escape' && $('#overlay').classList.contains('show')) {
-$('#overlay').classList.remove('show');
-stopCamera();
-}
+if (e.key === 'Escape' && $('#overlay').classList.contains('show')) closeModal();
 });
 $('#filePerson').addEventListener('change', async function (e) {
 var f = e.target.files[0]; if (!f) return;
@@ -342,26 +383,46 @@ track('camera_snap');
 function loadGarment() {
 var dom = scrapeProductFromDOM();
 state.garmentInfo = dom;
-$('#garmentInfo').textContent = dom.name || '';
-setStatus('Buscando peça…');
+setStatus('Carregando…');
 resolveProductIfNeeded(dom.image).then(function (r) {
 var img = r.image_url_hd || r.image_url || dom.image;
 state.garmentUrl = img;
-if (img) setPreview($('#pvGarment'), img);
-var note = r.suggested_category ? ' • ' + r.suggested_category : '';
-setStatus('Peça pronta' + note, 'ok');
+setStatus('Pronto.', 'ok');
 updateGoButton();
 }).catch(function (e) {
 if (dom.image) {
 state.garmentUrl = dom.image;
-setPreview($('#pvGarment'), dom.image);
-setStatus('Peça pronta', 'ok');
+setStatus('Pronto.', 'ok');
 updateGoButton();
 } else {
-setStatus('Não consegui achar a imagem da peça', 'err');
+setStatus('Não consegui carregar a peça', 'err');
 }
 });
 }
+function scrollToBuy() {
+var target = findMountPoint();
+if (!target) return;
+try {
+target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+var orig = target.style.cssText;
+target.style.transition = 'box-shadow .4s';
+target.style.boxShadow = '0 0 0 4px rgba(255,200,0,.6)';
+setTimeout(function(){ target.style.cssText = orig; }, 1600);
+} catch(e) {}
+}
+$('#buyBtn').addEventListener('click', function () {
+track('buy_click', { product: state.garmentInfo && state.garmentInfo.name });
+$('#overlay').classList.remove('show');
+stopCamera();
+setTimeout(scrollToBuy, 320);
+});
+$('#retryBtn').addEventListener('click', function () {
+track('retry');
+goToStep(null);
+resetResultUI();
+setStatus('Pronto pra testar de novo.', 'ok');
+$('#go').disabled = !(state.personDataUri && state.garmentUrl);
+});
 $('#go').addEventListener('click', async function () {
 if (!state.personDataUri || !state.garmentUrl) return;
 if (!rateLimitOk()) { setStatus('Limite diário atingido', 'err'); return; }
@@ -374,30 +435,44 @@ track('result', { cached: true });
 return;
 }
 $('#go').disabled = true;
+goToStep('result');
 setStatus('Gerando — pode levar 1 a 2 minutos…'); progress(true);
 var msgs = ['Analisando sua foto…','Identificando a peça…','Ajustando proporções…','Renderizando o resultado…','Quase lá, é a IA capricha…'];
 var msgIx = 0;
-var msgTimer = setInterval(function(){
+state._msgTimer = setInterval(function(){
 msgIx = (msgIx + 1) % msgs.length;
 setStatus(msgs[msgIx]);
 }, 12000);
-state._msgTimer = msgTimer;
+state._abortCtl = ('AbortController' in window) ? new AbortController() : null;
 track('generate', { product: state.garmentInfo && state.garmentInfo.name });
 try {
 var d = await callTryOn(
 state.personDataUri,
 location.href,
 state.garmentUrl,
-state.garmentInfo && state.garmentInfo.name
+state.garmentInfo && state.garmentInfo.name,
+state._abortCtl
 );
-clearInterval(state.progressInterval); clearInterval(state._msgTimer); setBar(100);
+clearInterval(state.progressInterval); clearInterval(state._msgTimer);
+state.progressInterval = null; state._msgTimer = null; state._abortCtl = null;
+if (!$('#overlay').classList.contains('show')) return;
+setBar(100);
 setPreview($('#pvResult'), 'data:image/jpeg;base64,' + d.image_b64);
 setStatus('Pronto.', 'ok');
+$('#resultActions').classList.add('show');
 setCached(state.personHash, state.garmentUrl, d.image_b64);
 track('result', { cached: false });
 } catch (e) {
-clearInterval(state.progressInterval); clearInterval(state._msgTimer); setBar(0);
-setStatus('Erro: ' + e.message, 'err');
+clearInterval(state.progressInterval); clearInterval(state._msgTimer);
+state.progressInterval = null; state._msgTimer = null;
+if (e && (e.name === 'AbortError' || (state._abortCtl && state._abortCtl.signal && state._abortCtl.signal.aborted))) {
+state._abortCtl = null;
+return;
+}
+state._abortCtl = null;
+setBar(0);
+goToStep(null);
+setStatus('Erro: ' + e.message + ' — tenta de novo', 'err');
 track('error', { message: e.message });
 } finally {
 $('#go').disabled = false;

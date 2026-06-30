@@ -12,12 +12,66 @@ import os
 import re
 import time
 import base64
+import threading
+from collections import defaultdict, deque
 import requests
 from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+
+# ---------------------------------------------------------
+# Origin allowlist + CORS
+# Pra SaaS futuro: ALLOWED_ORIGINS vira lista por tenant no DB.
+# Hoje: env var CSV ou default Martina.
+# ---------------------------------------------------------
+_DEFAULT_ORIGINS = [
+    "https://martinaoficial.com.br",
+    "https://www.martinaoficial.com.br",
+    "https://martina67.lojavirtualnuvem.com.br",
+]
+ALLOWED_ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", ",".join(_DEFAULT_ORIGINS)).split(",") if o.strip()]
+# Dev sempre permitido + null (file://, sandbox de teste)
+DEV_ORIGINS = ["http://localhost", "http://127.0.0.1", "null"]
+
+def _origin_allowed(origin):
+    if not origin:
+        return False
+    if origin in ALLOWED_ORIGINS:
+        return True
+    return any(origin.startswith(d) for d in DEV_ORIGINS)
+
+# CORS dinâmico: só permite origens autorizadas (e Origin: null pra fetch direto)
+CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS + DEV_ORIGINS}}, supports_credentials=False)
+
+# ---------------------------------------------------------
+# Rate limit por IP (in-memory). Pra SaaS escalar: Redis.
+# /tryon é o caro (custa OpenAI). Mais restrito.
+# ---------------------------------------------------------
+_RL_LOCK = threading.Lock()
+_RL_BUCKETS = defaultdict(deque)  # ip -> deque de timestamps
+
+def _check_rate_limit(ip, limit_per_min=10, limit_per_hour=60):
+    """Sliding window. Limites altos pra teste interno; restringir em prod."""
+    now = time.time()
+    with _RL_LOCK:
+        bucket = _RL_BUCKETS[ip]
+        # purga >1h
+        while bucket and bucket[0] < now - 3600:
+            bucket.popleft()
+        last_min = sum(1 for t in bucket if t > now - 60)
+        last_hour = len(bucket)
+        if last_min >= limit_per_min or last_hour >= limit_per_hour:
+            return False
+        bucket.append(now)
+        return True
+
+def _client_ip():
+    # Render põe IP real em X-Forwarded-For (primeiro hop)
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.remote_addr or "unknown"
 
 # ---------------------------------------------------------
 def _openai_key():
@@ -39,6 +93,14 @@ def health():
 # ---------------------------------------------------------
 @app.route("/tryon", methods=["POST"])
 def tryon_create():
+    # Origin allowlist (anti-abuso: outro site nao pode embedar nosso widget e queimar nossa key)
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"error": "origin nao autorizado"}), 403
+    # Rate limit por IP (10/min, 60/h) — protege OpenAI USD
+    ip = _client_ip()
+    if not _check_rate_limit(ip, limit_per_min=10, limit_per_hour=60):
+        return jsonify({"error": "rate limit excedido — tente novamente em alguns minutos"}), 429
     if not _openai_key():
         return jsonify({"error": "OPENAI_API_KEY not configured"}), 500
 
@@ -174,6 +236,12 @@ def tryon_create():
 # ---------------------------------------------------------
 @app.route("/resolve-product", methods=["POST"])
 def resolve_product():
+    # Anti-abuso. Mais permissivo que /tryon (so faz scrape, nao usa OpenAI).
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"error": "origin nao autorizado"}), 403
+    if not _check_rate_limit(_client_ip(), limit_per_min=30, limit_per_hour=300):
+        return jsonify({"error": "rate limit excedido"}), 429
     body = request.get_json(silent=True) or {}
     url = (body.get("page_url") or "").strip()
     if not url:
@@ -367,6 +435,7 @@ $("#productPage").addEventListener("input", e=>{
       const img = d.image_url_hd || d.image_url;
       garmentState.url = img;
       setPreview($("#prevGarment"), img);
+      // se categoria estava em "auto", aplica a sugestao do backend
       if ($("#category").value === "auto" && d.suggested_category) {
         garmentState.suggestedCategory = d.suggested_category;
       }
