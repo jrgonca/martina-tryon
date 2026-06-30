@@ -90,6 +90,44 @@ try {
 if (window.dataLayer) window.dataLayer.push(Object.assign({ event: 'tryon_' + event }, params || {}));
 } catch (e) {}
 }
+function uuid(){ try { return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,function(c){return (c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16);}); } catch(e){ return 'x'+Math.random().toString(36).slice(2)+Date.now().toString(36); } }
+function getClientId(){ try { var v = localStorage.getItem('tryon_cid'); if (!v) { v = uuid(); localStorage.setItem('tryon_cid', v); } return v; } catch(e){ return ''; } }
+function getSessionId(){ try { var v = sessionStorage.getItem('tryon_sid'); if (!v) { v = uuid(); sessionStorage.setItem('tryon_sid', v); } return v; } catch(e){ return ''; } }
+function markProvado(name, url){
+try {
+var key='tryon_provados', arr = JSON.parse(sessionStorage.getItem(key)||'[]');
+arr.push({name:(name||'').slice(0,200), url:(url||'').slice(0,500), ts:Date.now()});
+if (arr.length > 50) arr = arr.slice(-50);
+sessionStorage.setItem(key, JSON.stringify(arr));
+} catch(e) {}
+}
+// _ANALYTICS_CTX é populado pelo init() — guarda referencia ao state do widget
+var _ANALYTICS_CTX = null;
+function emit(eventType, extra){
+try {
+var s = _ANALYTICS_CTX || {};
+var name = (s.garmentInfo && s.garmentInfo.name)
+  || ((document.querySelector('h1.product-name, [itemprop="name"], h1.product-title, h1')||{}).textContent || '').trim();
+var cat = (s.garmentInfo && s.garmentInfo.category) || '';
+var payload = {
+tenant: 'martina',
+event_type: eventType,
+client_id: getClientId(),
+session_id: getSessionId(),
+product_url: location.href,
+product_name: name.slice(0,200),
+garment_category: cat
+};
+if (extra) Object.assign(payload, extra);
+var body = JSON.stringify(payload);
+var url = API_URL + '/event';
+if (navigator.sendBeacon) {
+navigator.sendBeacon(url, new Blob([body], {type:'application/json'}));
+} else {
+fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:body, keepalive:true, mode:'cors'}).catch(function(){});
+}
+} catch (e) {}
+}
 function resizeImage(file, maxSide) {
 maxSide = maxSide || 1024;
 return new Promise(function (res, rej) {
@@ -288,6 +326,14 @@ progressInterval: null,
 _msgTimer: null,
 _abortCtl: null,
 };
+// Conecta state pro emit() (analytics)
+_ANALYTICS_CTX = state;
+// View do botão: dispara depois de garmentInfo carregar pra ter nome do produto.
+// Disparo uma só vez por carregamento de pagina, mesmo se widget remount.
+if (!window.__tryon_viewed) {
+  window.__tryon_viewed = true;
+  setTimeout(function(){ emit('tryon_view'); }, 1500);
+}
 function abortGeneration() {
 clearInterval(state.progressInterval); state.progressInterval = null;
 clearInterval(state._msgTimer); state._msgTimer = null;
@@ -317,6 +363,7 @@ if (start) state.progressInterval = setInterval(function () { p = Math.min(94, p
 function updateGoButton() { $('#go').disabled = !(state.personDataUri && state.garmentUrl); }
 $('#trigger').addEventListener('click', function () {
 track('open', { product: state.garmentInfo && state.garmentInfo.name });
+emit('tryon_open');
 $('#overlay').classList.add('show');
 goToStep(null);
 resetResultUI();
@@ -412,6 +459,7 @@ setTimeout(function(){ target.style.cssText = orig; }, 1600);
 }
 $('#buyBtn').addEventListener('click', function () {
 track('buy_click', { product: state.garmentInfo && state.garmentInfo.name });
+emit('tryon_buy_click');
 $('#overlay').classList.remove('show');
 stopCamera();
 setTimeout(scrollToBuy, 320);
@@ -462,6 +510,8 @@ setStatus('Pronto.', 'ok');
 $('#resultActions').classList.add('show');
 setCached(state.personHash, state.garmentUrl, d.image_b64);
 track('result', { cached: false });
+emit('tryon_complete');
+markProvado((state.garmentInfo && state.garmentInfo.name) || (document.querySelector('h1')||{}).textContent || '', location.href);
 } catch (e) {
 clearInterval(state.progressInterval); clearInterval(state._msgTimer);
 state.progressInterval = null; state._msgTimer = null;
