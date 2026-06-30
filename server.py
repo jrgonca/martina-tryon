@@ -74,6 +74,36 @@ def _client_ip():
     return request.remote_addr or "unknown"
 
 # ---------------------------------------------------------
+# Cache simples de /resolve-product (in-memory, TTL).
+# v0 piloto: dict + lock. SaaS v1: Redis por tenant.
+# Hit = zero scrape na loja. Miss = scrape e armazena.
+# ---------------------------------------------------------
+_RESOLVE_CACHE = {}              # url -> (timestamp_inserido, payload_dict)
+_RESOLVE_CACHE_LOCK = threading.Lock()
+_RESOLVE_TTL = int(os.environ.get("RESOLVE_TTL_S", "600"))   # 10min default
+_RESOLVE_MAX = int(os.environ.get("RESOLVE_MAX", "1000"))    # cap memória
+
+def _resolve_get(url):
+    with _RESOLVE_CACHE_LOCK:
+        ent = _RESOLVE_CACHE.get(url)
+        if not ent:
+            return None
+        ts, data = ent
+        if time.time() - ts > _RESOLVE_TTL:
+            _RESOLVE_CACHE.pop(url, None)
+            return None
+        return data
+
+def _resolve_set(url, data):
+    with _RESOLVE_CACHE_LOCK:
+        _RESOLVE_CACHE[url] = (time.time(), data)
+        # eviction: se passar do cap, joga fora os 20% mais velhos
+        if len(_RESOLVE_CACHE) > _RESOLVE_MAX:
+            items = sorted(_RESOLVE_CACHE.items(), key=lambda kv: kv[1][0])
+            for k, _ in items[: max(1, _RESOLVE_MAX // 5)]:
+                _RESOLVE_CACHE.pop(k, None)
+
+# ---------------------------------------------------------
 def _openai_key():
     t = os.environ.get("OPENAI_API_KEY", "")
     return t or None
@@ -86,6 +116,8 @@ def health():
         "engine": "openai-gpt-image-1",
         "has_token": bool(_openai_key()),
         "time": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "resolve_cache_size": len(_RESOLVE_CACHE),
+        "resolve_ttl_s": _RESOLVE_TTL,
     })
 
 # ---------------------------------------------------------
@@ -246,6 +278,12 @@ def resolve_product():
     url = (body.get("page_url") or "").strip()
     if not url:
         return jsonify({"error": "page_url obrigatorio"}), 400
+    # Cache hit -> retorna direto, sem scrape (cache hint pro debug)
+    cached = _resolve_get(url)
+    if cached:
+        out = dict(cached)
+        out["_cache"] = "hit"
+        return jsonify(out)
     try:
         r = requests.get(url, timeout=15, headers={
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -283,7 +321,11 @@ def resolve_product():
             suggested = "lower_body"
         else:
             suggested = "upper_body"
-        return jsonify({"image_url": img, "image_url_hd": hd, "suggested_category": suggested})
+        payload = {"image_url": img, "image_url_hd": hd, "suggested_category": suggested}
+        _resolve_set(url, payload)
+        out = dict(payload)
+        out["_cache"] = "miss"
+        return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
