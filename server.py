@@ -226,7 +226,7 @@ def tryon_create():
     person = body.get("person_image")          # data URI ou URL publica
     garment = body.get("garment_image_url")    # URL publica
     desc = (body.get("garment_description") or "esta peca de roupa").strip()
-    quality = body.get("quality") or "medium"  # low | medium | high
+    quality = body.get("quality") or "low"  # low | medium | high — low p/ economia 4x
     size = body.get("size") or "1024x1024"     # 1024x1024 | 1024x1536 | 1536x1024
 
     # auto-detecta categoria pela descricao se nao for fornecida
@@ -750,8 +750,8 @@ def get_stats():
                 GROUP BY product_name ORDER BY v DESC LIMIT 10
             """, (tenant, t_from, t_to))
         ]
-    # Custo estimado OpenAI: completes x ~$0.042 (quality=medium 1024x1024)
-    cost_usd = round(counts["tryon_complete"] * 0.042, 2)
+    # Custo estimado OpenAI: completes x ~$0.011 (quality=low 1024x1024)
+    cost_usd = round(counts["tryon_complete"] * 0.011, 2)
     # Taxas
     def pct(n, d):
         return round(100.0 * n / d, 1) if d > 0 else 0.0

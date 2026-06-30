@@ -167,7 +167,7 @@ body: JSON.stringify({
 person_image: personDataUri,
 garment_image_url: garmentImageUrl,
 garment_description: garmentDescription,
-quality: 'medium',
+quality: 'low', // ~$0.011/img (4x mais barato que medium). Junior validou que qualidade está OK.
 }),
 }).then(function (r) {
 if (timer) clearTimeout(timer);
