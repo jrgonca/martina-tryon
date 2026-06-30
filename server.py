@@ -11,6 +11,8 @@ Endpoints:
 import os
 import re
 import time
+import json
+import sqlite3
 import base64
 import threading
 from collections import defaultdict, deque
@@ -19,6 +21,83 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 
 app = Flask(__name__)
+
+# ---------------------------------------------------------
+# Events DB (analytics do funil TryOn).
+# v0 piloto: SQLite local no /tmp do Render (efêmero entre deploys — ACEITAVEL).
+# SaaS v1: migra schema pra Postgres com tenant_id real, particionado.
+# Schema JA E multi-tenant: coluna tenant em tudo, hoje 'martina' hardcoded.
+# ---------------------------------------------------------
+_DB_PATH = os.environ.get("EVENTS_DB", "/tmp/tryon_events.db")
+_DB_LOCK = threading.Lock()
+
+def _db():
+    conn = sqlite3.connect(_DB_PATH, timeout=10, isolation_level=None)  # autocommit
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+def _init_db():
+    with _DB_LOCK, _db() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant      TEXT NOT NULL,
+                client_id   TEXT,
+                session_id  TEXT,
+                event_type  TEXT NOT NULL,
+                product_url TEXT,
+                product_name TEXT,
+                garment_category TEXT,
+                order_id    TEXT,
+                order_value REAL,
+                ts          REAL NOT NULL,
+                ip          TEXT,
+                meta        TEXT
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_events_tenant_ts ON events(tenant, ts)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, ts)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(tenant, event_type, ts)")
+_init_db()
+
+# Tipos de evento aceitos (defesa contra spam de campo livre)
+_VALID_EVENT_TYPES = {
+    "tryon_view",         # botão injetado/visível na PDP
+    "tryon_open",         # modal aberto
+    "tryon_complete",     # resultado recebido OK
+    "tryon_buy_click",    # clique COMPRAR no card de resultado
+    "purchase_attributed" # Nuvemshop registrou compra de produto provado mesma sessão
+}
+
+# Cap de retencao do banco (v0 efêmero no /tmp Render mesmo assim).
+# SaaS v1: politica formal por tenant (LGPD), particionado por mes.
+_DB_RETENTION_DAYS = int(os.environ.get("DB_RETENTION_DAYS", "90"))
+
+def _meta_sanitize(raw):
+    """Aceita dict com max 10 chaves; valores stringificados curtos. Anti-spam."""
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for k, v in list(raw.items())[:10]:
+        ks = str(k)[:32]
+        if isinstance(v, (str, int, float, bool)) or v is None:
+            vs = str(v)[:200]
+        else:
+            vs = json.dumps(v)[:200]
+        out[ks] = vs
+    return out
+
+# ---------------------------------------------------------
+# Auth simples do painel/stats (v0).
+# Set PANEL_KEY no env do Render. Se nao setada = aberto (modo dev).
+# SaaS v1: API keys por tenant (CRUD na DB).
+# ---------------------------------------------------------
+_PANEL_KEY = os.environ.get("PANEL_KEY", "")
+
+def _panel_authorized():
+    if not _PANEL_KEY:
+        return True  # sem chave configurada = aberto (dev / teste)
+    return request.args.get("key", "") == _PANEL_KEY
 
 # ---------------------------------------------------------
 # Origin allowlist + CORS
@@ -534,6 +613,324 @@ $("#btnGo").addEventListener("click", async ()=>{
 @app.route("/test", methods=["GET"])
 def test_page():
     return Response(TEST_HTML, mimetype="text/html")
+
+# ---------------------------------------------------------
+# /event — recebe evento do widget (sendBeacon)
+# Permissivo no rate limit (evento é leve, alto volume esperado).
+# Ignora silenciosamente se origin invalida ou tipo invalido — beacon nao
+# precisa de feedback ao cliente (sem retry).
+# ---------------------------------------------------------
+@app.route("/event", methods=["POST", "OPTIONS"])
+def post_event():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"ok": False, "error": "origin"}), 204  # 204 pra beacon nao retentar
+    if not _check_rate_limit(_client_ip(), limit_per_min=120, limit_per_hour=3000):
+        return jsonify({"ok": False, "error": "rate"}), 204
+    # sendBeacon pode mandar como text/plain — aceita ambos
+    raw = request.get_data(as_text=True) or "{}"
+    try:
+        body = json.loads(raw)
+    except Exception:
+        return jsonify({"ok": False, "error": "json"}), 204
+    ev = (body.get("event_type") or "").strip()
+    if ev not in _VALID_EVENT_TYPES:
+        return jsonify({"ok": False, "error": "type"}), 204
+    tenant = (body.get("tenant") or "martina").strip().lower()
+    # Sanitiza order_value (defesa contra valor forjado em magnitude absurda).
+    # purchase_attributed pode ser inflado por adversario — log do IP fica pra audit.
+    try:
+        order_value = float(body.get("order_value") or 0)
+        if order_value < 0 or order_value > 1_000_000:  # R$ 1M cap absoluto
+            order_value = 0
+    except Exception:
+        order_value = 0
+    meta = _meta_sanitize(body.get("meta"))
+    try:
+        with _DB_LOCK, _db() as c:
+            c.execute("""
+                INSERT INTO events (tenant, client_id, session_id, event_type,
+                                    product_url, product_name, garment_category,
+                                    order_id, order_value, ts, ip, meta)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                tenant,
+                (body.get("client_id") or "")[:64],
+                (body.get("session_id") or "")[:64],
+                ev,
+                (body.get("product_url") or "")[:500],
+                (body.get("product_name") or "")[:200],
+                (body.get("garment_category") or "")[:32],
+                (body.get("order_id") or "")[:64],
+                order_value,
+                time.time(),
+                _client_ip(),
+                json.dumps(meta)[:2000],
+            ))
+            # cleanup oportunistico (1% chance) — retencao 90d default
+            if int(time.time()) % 100 == 0:
+                c.execute("DELETE FROM events WHERE ts < ?", (time.time() - _DB_RETENTION_DAYS * 86400,))
+        return jsonify({"ok": True}), 200
+    except Exception:
+        return jsonify({"ok": False, "error": "db"}), 204
+
+# ---------------------------------------------------------
+# /stats — agrega funil pra painel
+# Filtros: tenant, from (YYYY-MM-DD), to (YYYY-MM-DD)
+# ---------------------------------------------------------
+def _parse_day(s, default_ts):
+    try:
+        return time.mktime(time.strptime(s, "%Y-%m-%d"))
+    except Exception:
+        return default_ts
+
+@app.route("/stats", methods=["GET"])
+def get_stats():
+    # Auth simples via ?key= (PANEL_KEY env). Sem chave configurada = aberto (dev).
+    if not _panel_authorized():
+        return jsonify({"error": "unauthorized"}), 401
+    tenant = (request.args.get("tenant") or "martina").strip().lower()
+    now = time.time()
+    t_from = _parse_day(request.args.get("from", ""), now - 30 * 86400)
+    t_to = _parse_day(request.args.get("to", ""), now) + 86400  # inclui dia inteiro
+    with _DB_LOCK, _db() as c:
+        # Contagens por tipo
+        counts = {ev: 0 for ev in _VALID_EVENT_TYPES}
+        for row in c.execute("""
+            SELECT event_type, COUNT(*) FROM events
+            WHERE tenant=? AND ts BETWEEN ? AND ?
+            GROUP BY event_type
+        """, (tenant, t_from, t_to)):
+            counts[row[0]] = row[1]
+        # Faturamento atribuido
+        rev = c.execute("""
+            SELECT COALESCE(SUM(order_value), 0) FROM events
+            WHERE tenant=? AND event_type='purchase_attributed' AND ts BETWEEN ? AND ?
+        """, (tenant, t_from, t_to)).fetchone()[0] or 0
+        # Top produtos provados (event_type=tryon_complete)
+        top_provados = [
+            {"name": r[0], "n": r[1]}
+            for r in c.execute("""
+                SELECT product_name, COUNT(*) AS n FROM events
+                WHERE tenant=? AND event_type='tryon_complete' AND ts BETWEEN ? AND ?
+                  AND product_name <> ''
+                GROUP BY product_name ORDER BY n DESC LIMIT 10
+            """, (tenant, t_from, t_to))
+        ]
+        # Top produtos atribuidos
+        top_atrib = [
+            {"name": r[0], "n": r[1], "value": r[2] or 0}
+            for r in c.execute("""
+                SELECT product_name, COUNT(*) AS n, COALESCE(SUM(order_value), 0) AS v FROM events
+                WHERE tenant=? AND event_type='purchase_attributed' AND ts BETWEEN ? AND ?
+                  AND product_name <> ''
+                GROUP BY product_name ORDER BY v DESC LIMIT 10
+            """, (tenant, t_from, t_to))
+        ]
+    # Custo estimado OpenAI: completes x ~$0.042 (quality=medium 1024x1024)
+    cost_usd = round(counts["tryon_complete"] * 0.042, 2)
+    # Taxas
+    def pct(n, d):
+        return round(100.0 * n / d, 1) if d > 0 else 0.0
+    # Funnel relativo: cada etapa vs view inicial (drop-off)
+    base = max(1, counts["tryon_view"])
+    funnel = [
+        {"label": "Viu botão",      "n": counts["tryon_view"],         "pct": 100.0},
+        {"label": "Abriu modal",    "n": counts["tryon_open"],         "pct": pct(counts["tryon_open"], base)},
+        {"label": "Provou (IA OK)", "n": counts["tryon_complete"],     "pct": pct(counts["tryon_complete"], base)},
+        {"label": "Clicou comprar", "n": counts["tryon_buy_click"],    "pct": pct(counts["tryon_buy_click"], base)},
+        {"label": "Comprou",        "n": counts["purchase_attributed"],"pct": pct(counts["purchase_attributed"], base)},
+    ]
+    return jsonify({
+        "tenant": tenant,
+        "from": time.strftime("%Y-%m-%d", time.localtime(t_from)),
+        "to": time.strftime("%Y-%m-%d", time.localtime(t_to - 86400)),
+        "counts": counts,
+        "rates": {
+            "ctr_btn": pct(counts["tryon_open"], counts["tryon_view"]),
+            "taxa_prova": pct(counts["tryon_complete"], counts["tryon_open"]),
+            "taxa_buy_click": pct(counts["tryon_buy_click"], counts["tryon_complete"]),
+            "taxa_compra": pct(counts["purchase_attributed"], counts["tryon_complete"]),
+        },
+        "funnel": funnel,
+        "revenue_brl": round(rev, 2),
+        "cost_openai_usd": cost_usd,
+        "top_provados": top_provados,
+        "top_atribuidos": top_atrib,
+    })
+
+# ---------------------------------------------------------
+# /panel — HTML do painel (estilo martina)
+# ---------------------------------------------------------
+PANEL_HTML = r"""<!doctype html>
+<html lang="pt-BR"><head>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>TryOn - Painel Martina</title>
+<style>
+:root{--bg:#fafafa;--fg:#111;--muted:#666;--line:#e5e5e5;--accent:#111;--ok:#059669;--err:#dc2626}
+*{box-sizing:border-box}
+body{font-family:-apple-system,system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:0;padding:24px}
+h1{font-weight:700;letter-spacing:.3em;margin:0 0 4px;text-align:center}
+.sub{text-align:center;color:var(--muted);margin-bottom:24px;font-size:13px;letter-spacing:.18em;text-transform:uppercase}
+.wrap{max-width:1100px;margin:0 auto}
+.filters{display:flex;gap:12px;justify-content:center;margin-bottom:24px;flex-wrap:wrap}
+.filters label{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.filters input,.filters button{padding:8px 12px;border:1px solid var(--line);border-radius:6px;font-size:13px;background:#fff}
+.filters button{background:#111;color:#fff;border:0;cursor:pointer;letter-spacing:.1em;text-transform:uppercase;font-weight:600}
+.row{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px}
+@media(max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+.kpi .label{font-size:10px;color:var(--muted);letter-spacing:.18em;text-transform:uppercase;margin-bottom:8px}
+.kpi .v{font-size:28px;font-weight:700;letter-spacing:.02em}
+.kpi .sub2{font-size:11px;color:var(--muted);margin-top:4px}
+.row2{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+@media(max-width:900px){.row2{grid-template-columns:repeat(2,1fr)}}
+.taxa{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center}
+.taxa .label{font-size:10px;color:var(--muted);letter-spacing:.18em;text-transform:uppercase;margin-bottom:6px}
+.taxa .v{font-size:24px;font-weight:700;color:var(--ok)}
+.tables{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.tables{grid-template-columns:1fr}}
+.table{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px}
+.table h3{margin:0 0 12px;font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:6px 4px;border-bottom:1px solid #f0f0f0}
+td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.financ{background:#fff;border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:24px;text-align:center}
+.financ .pair{display:inline-block;margin:0 16px}
+.financ .label{font-size:10px;color:var(--muted);letter-spacing:.18em;text-transform:uppercase}
+.financ .v{font-size:22px;font-weight:700}
+.financ .v.ok{color:var(--ok)}
+.financ .v.err{color:var(--err)}
+.empty{text-align:center;color:#999;font-size:13px;padding:24px}
+.foot{text-align:center;color:#999;font-size:11px;margin-top:24px;letter-spacing:.1em}
+</style></head><body>
+<div class="wrap">
+  <h1>MARTINA</h1>
+  <div class="sub">Painel TryOn - Conversão (mesma sessão)</div>
+
+  <div class="filters">
+    <label>De <input type="date" id="from"></label>
+    <label>Ate <input type="date" id="to"></label>
+    <button onclick="load()">Atualizar</button>
+  </div>
+
+  <div class="financ" id="financ">Carregando...</div>
+
+  <div class="row">
+    <div class="kpi"><div class="label">Views</div><div class="v" id="v_view">-</div><div class="sub2">botao visto na PDP</div></div>
+    <div class="kpi"><div class="label">Aberturas</div><div class="v" id="v_open">-</div><div class="sub2">modal aberto</div></div>
+    <div class="kpi"><div class="label">Provas OK</div><div class="v" id="v_complete">-</div><div class="sub2">IA gerou</div></div>
+    <div class="kpi"><div class="label">Clique Comprar</div><div class="v" id="v_buy">-</div><div class="sub2">no card resultado</div></div>
+    <div class="kpi"><div class="label">Compras</div><div class="v" id="v_purchase">-</div><div class="sub2">atribuidas (mesma sessão)</div></div>
+  </div>
+
+  <div class="row2">
+    <div class="taxa"><div class="label">CTR Botão</div><div class="v" id="r_ctr">-</div></div>
+    <div class="taxa"><div class="label">Taxa de Prova</div><div class="v" id="r_prova">-</div></div>
+    <div class="taxa"><div class="label">Buy Click</div><div class="v" id="r_buy">-</div></div>
+    <div class="taxa"><div class="label">Taxa Compra</div><div class="v" id="r_compra">-</div></div>
+  </div>
+
+  <div class="table" style="margin-bottom:24px">
+    <h3>Funil completo (% sobre quem viu o botão)</h3>
+    <div id="funnel"><div class="empty">Sem dados</div></div>
+  </div>
+
+  <div class="tables">
+    <div class="table">
+      <h3>Top produtos provados</h3>
+      <div id="t_prov"><div class="empty">Sem dados</div></div>
+    </div>
+    <div class="table">
+      <h3>Top produtos atribuidos (compra)</h3>
+      <div id="t_atrib"><div class="empty">Sem dados</div></div>
+    </div>
+  </div>
+
+  <div class="foot">v0 piloto Martina | refresh manual no botao acima</div>
+</div>
+
+<script>
+const API = location.origin;
+const TENANT = (new URLSearchParams(location.search).get('tenant') || 'martina').toLowerCase();
+document.querySelector('h1').textContent = TENANT.toUpperCase();
+function fmtBRL(n){ return 'R$ ' + (n||0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtUSD(n){ return 'US$ ' + (n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function fmtN(n){ return (n||0).toLocaleString('pt-BR'); }
+
+const KEY = new URLSearchParams(location.search).get('key') || '';
+async function load(){
+  const f = document.getElementById('from').value;
+  const t = document.getElementById('to').value;
+  const url = `${API}/stats?tenant=${encodeURIComponent(TENANT)}${f?'&from='+f:''}${t?'&to='+t:''}${KEY?'&key='+encodeURIComponent(KEY):''}`;
+  try {
+    const r = await fetch(url, {cache:'no-store'});
+    const d = await r.json();
+    // KPIs
+    document.getElementById('v_view').textContent = fmtN(d.counts.tryon_view);
+    document.getElementById('v_open').textContent = fmtN(d.counts.tryon_open);
+    document.getElementById('v_complete').textContent = fmtN(d.counts.tryon_complete);
+    document.getElementById('v_buy').textContent = fmtN(d.counts.tryon_buy_click);
+    document.getElementById('v_purchase').textContent = fmtN(d.counts.purchase_attributed);
+    // Taxas
+    document.getElementById('r_ctr').textContent = d.rates.ctr_btn + '%';
+    document.getElementById('r_prova').textContent = d.rates.taxa_prova + '%';
+    document.getElementById('r_buy').textContent = d.rates.taxa_buy_click + '%';
+    document.getElementById('r_compra').textContent = d.rates.taxa_compra + '%';
+    // Financeiro
+    const lift = d.revenue_brl - (d.cost_openai_usd * 5.5); // ~BRL aproximado
+    document.getElementById('financ').innerHTML = `
+      <div class="pair"><div class="label">Faturamento atribuido</div><div class="v ok">${fmtBRL(d.revenue_brl)}</div></div>
+      <div class="pair"><div class="label">Custo OpenAI</div><div class="v err">${fmtUSD(d.cost_openai_usd)}</div></div>
+      <div class="pair"><div class="label">Resultado bruto (BRL)</div><div class="v ${lift>=0?'ok':'err'}">${fmtBRL(lift)}</div></div>
+    `;
+    // Funil (barras horizontais)
+    document.getElementById('funnel').innerHTML = (d.funnel||[]).map(s=>{
+      const w = Math.max(2, s.pct);
+      return `<div style="display:flex;align-items:center;gap:12px;margin:8px 0">
+        <div style="width:130px;font-size:12px;color:#666">${s.label}</div>
+        <div style="flex:1;background:#f0f0f0;border-radius:4px;height:24px;position:relative;overflow:hidden">
+          <div style="width:${w}%;background:#111;height:100%;transition:width .3s"></div>
+        </div>
+        <div style="width:140px;text-align:right;font-size:13px;font-variant-numeric:tabular-nums">${fmtN(s.n)} <span style="color:#999">(${s.pct}%)</span></div>
+      </div>`;
+    }).join('') || '<div class="empty">Sem dados</div>';
+    // Tabelas
+    document.getElementById('t_prov').innerHTML = d.top_provados.length
+      ? '<table>' + d.top_provados.map(r => `<tr><td>${r.name}</td><td>${fmtN(r.n)}</td></tr>`).join('') + '</table>'
+      : '<div class="empty">Sem provas no periodo</div>';
+    document.getElementById('t_atrib').innerHTML = d.top_atribuidos.length
+      ? '<table>' + d.top_atribuidos.map(r => `<tr><td>${r.name}</td><td>${fmtBRL(r.value)}</td></tr>`).join('') + '</table>'
+      : '<div class="empty">Sem compras atribuidas no periodo</div>';
+  } catch(e) {
+    document.getElementById('financ').innerHTML = '<div class="empty">Erro carregando: ' + e.message + '</div>';
+  }
+}
+
+// Defaults: ultimos 30 dias
+(function(){
+  const t = new Date(), f = new Date(t.getTime() - 30*86400*1000);
+  document.getElementById('from').value = f.toISOString().slice(0,10);
+  document.getElementById('to').value = t.toISOString().slice(0,10);
+  load();
+})();
+</script>
+</body></html>
+"""
+
+@app.route("/panel", methods=["GET"])
+def panel_page():
+    # Auth simples via ?key= (mesma PANEL_KEY do /stats).
+    if not _panel_authorized():
+        return Response(
+            "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;padding:48px;text-align:center;color:#666'>"
+            "<h2 style='letter-spacing:.2em;color:#111'>ACESSO NEGADO</h2>"
+            "<p>Adicione <code>?key=SUA_CHAVE</code> na URL.</p></body>",
+            status=401, mimetype="text/html"
+        )
+    return Response(PANEL_HTML, mimetype="text/html")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
