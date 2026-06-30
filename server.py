@@ -12,6 +12,8 @@ import os
 import re
 import time
 import json
+import hmac
+import hashlib
 import sqlite3
 import base64
 import threading
@@ -88,16 +90,19 @@ def _meta_sanitize(raw):
     return out
 
 # ---------------------------------------------------------
-# Auth simples do painel/stats (v0).
-# Set PANEL_KEY no env do Render. Se nao setada = aberto (modo dev).
-# SaaS v1: API keys por tenant (CRUD na DB).
+# Auth simples do painel/stats (v0) — capability URL.
+# Estrutura: storage HASH do token (sha256) hardcoded. Token original SO Junior conhece.
+# Quem não tem o token, vê 404. Quem tem, acessa via /panel/<token> ou /stats?key=<token>.
+# Comparacao com hmac.compare_digest pra evitar timing attack.
+# SaaS v1: API keys por tenant na DB com revogacao.
 # ---------------------------------------------------------
-_PANEL_KEY = os.environ.get("PANEL_KEY", "")
+_PANEL_HASH = "efcd3643d0fc39e4ab9cb1c2c79a5926d92ceb6520d83a69c9fa18d711adc691"  # sha256 do token
 
-def _panel_authorized():
-    if not _PANEL_KEY:
-        return True  # sem chave configurada = aberto (dev / teste)
-    return request.args.get("key", "") == _PANEL_KEY
+def _panel_authorized(token):
+    if not token:
+        return False
+    given_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return hmac.compare_digest(given_hash, _PANEL_HASH)
 
 # ---------------------------------------------------------
 # Origin allowlist + CORS
@@ -688,8 +693,8 @@ def _parse_day(s, default_ts):
 
 @app.route("/stats", methods=["GET"])
 def get_stats():
-    # Auth simples via ?key= (PANEL_KEY env). Sem chave configurada = aberto (dev).
-    if not _panel_authorized():
+    # Auth via ?key=<token>. Token validado contra sha256 hardcoded.
+    if not _panel_authorized(request.args.get("key", "")):
         return jsonify({"error": "unauthorized"}), 401
     tenant = (request.args.get("tenant") or "martina").strip().lower()
     now = time.time()
@@ -855,16 +860,16 @@ td:last-child{text-align:right;font-variant-numeric:tabular-nums}
 <script>
 const API = location.origin;
 const TENANT = (new URLSearchParams(location.search).get('tenant') || 'martina').toLowerCase();
+const TOKEN = "__TOKEN_INJECTED__"; // injetado server-side a partir do path /panel/<token>
 document.querySelector('h1').textContent = TENANT.toUpperCase();
 function fmtBRL(n){ return 'R$ ' + (n||0).toLocaleString('pt-BR', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function fmtUSD(n){ return 'US$ ' + (n||0).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
 function fmtN(n){ return (n||0).toLocaleString('pt-BR'); }
 
-const KEY = new URLSearchParams(location.search).get('key') || '';
 async function load(){
   const f = document.getElementById('from').value;
   const t = document.getElementById('to').value;
-  const url = `${API}/stats?tenant=${encodeURIComponent(TENANT)}${f?'&from='+f:''}${t?'&to='+t:''}${KEY?'&key='+encodeURIComponent(KEY):''}`;
+  const url = `${API}/stats?tenant=${encodeURIComponent(TENANT)}${f?'&from='+f:''}${t?'&to='+t:''}&key=${encodeURIComponent(TOKEN)}`;
   try {
     const r = await fetch(url, {cache:'no-store'});
     const d = await r.json();
@@ -920,17 +925,20 @@ async function load(){
 </body></html>
 """
 
+@app.route("/panel/<token>", methods=["GET"])
+def panel_page_token(token):
+    # Capability URL: /panel/<token>. Token verificado vs sha256 hardcoded.
+    if not _panel_authorized(token):
+        # 404 generico — nao revela se path existe
+        return Response("Not Found", status=404, mimetype="text/plain")
+    # Injeta o token no HTML pra fetch /stats?key=<token> funcionar
+    body = PANEL_HTML.replace("__TOKEN_INJECTED__", token)
+    return Response(body, mimetype="text/html")
+
 @app.route("/panel", methods=["GET"])
-def panel_page():
-    # Auth simples via ?key= (mesma PANEL_KEY do /stats).
-    if not _panel_authorized():
-        return Response(
-            "<!doctype html><meta charset=utf-8><body style='font-family:system-ui;padding:48px;text-align:center;color:#666'>"
-            "<h2 style='letter-spacing:.2em;color:#111'>ACESSO NEGADO</h2>"
-            "<p>Adicione <code>?key=SUA_CHAVE</code> na URL.</p></body>",
-            status=401, mimetype="text/html"
-        )
-    return Response(PANEL_HTML, mimetype="text/html")
+def panel_root():
+    # /panel sem token devolve 404 genérico (nao revela existência do path)
+    return Response("Not Found", status=404, mimetype="text/plain")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
