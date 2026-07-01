@@ -98,7 +98,7 @@ def _meta_sanitize(raw):
 # Comparacao com hmac.compare_digest pra evitar timing attack.
 # SaaS v1: API keys por tenant na DB com revogacao.
 # ---------------------------------------------------------
-_PANEL_HASH = "efcd3643d0fc39e4ab9cb1c2c79a5926d92ceb6520d83a69c9fa18d711adc691"  # sha256 do token
+_PANEL_HASH = "82760f0698fd517afc47db92dd4ce68477907c9d5f37f17ea70edcf8164e9a87"  # sha256 do token
 
 def _panel_authorized(token):
     if not token:
