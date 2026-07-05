@@ -62,6 +62,40 @@ def _init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(tenant, event_type, ts)")
         # idempotencia: lookup rapido por (tenant, event_type, order_id) p/ dedup purchase_attributed
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_order ON events(tenant, event_type, order_id)")
+        # ---- Perfil de tamanho (piloto recomendacao). Chave (tenant, user_hash).
+        # user_hash = hash local gerado no widget (nao PII). SaaS v1: pode virar user_id real.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS user_profiles (
+                tenant       TEXT NOT NULL,
+                user_hash    TEXT NOT NULL,
+                size_top     TEXT,
+                size_bottom  TEXT,
+                size_dress   TEXT,
+                fit_pref     TEXT,   -- 'colado' | 'ideal' | 'soltinho' | null
+                updated_at   REAL,
+                PRIMARY KEY (tenant, user_hash)
+            )
+        """)
+        # ---- Feedback pos-tryon (motor de aprendizado).
+        # Sistema aprende: se muita gente com tamanho_declarado X deu 'apertado' no size_suggested da peça Y,
+        # sugere +1 pra proximos usuarios com perfil semelhante.
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS size_feedback (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant            TEXT NOT NULL,
+                user_hash         TEXT,
+                product_url       TEXT NOT NULL,
+                product_name      TEXT,
+                garment_category  TEXT,
+                size_declared     TEXT,   -- tamanho usual da usuaria
+                size_suggested    TEXT,   -- o que o sistema sugeriu
+                size_tried        TEXT,   -- qual ela viu no try-on
+                feedback          TEXT,   -- 'apertado' | 'ideal' | 'largo'
+                ts                REAL NOT NULL
+            )
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS idx_sizefb_product ON size_feedback(tenant, product_url, feedback)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_sizefb_user ON size_feedback(tenant, user_hash, ts)")
 _init_db()
 
 # Tipos de evento aceitos (defesa contra spam de campo livre)
@@ -98,7 +132,7 @@ def _meta_sanitize(raw):
 # Comparacao com hmac.compare_digest pra evitar timing attack.
 # SaaS v1: API keys por tenant na DB com revogacao.
 # ---------------------------------------------------------
-_PANEL_HASH = "82760f0698fd517afc47db92dd4ce68477907c9d5f37f17ea70edcf8164e9a87"  # sha256 do token
+_PANEL_HASH = "82760f0698fd517afc47db92dd4ce68477907c9d5f37f17ea70edcf8164e9a87"  # sha256 do token "martina2026" (Junior lembra)
 
 def _panel_authorized(token):
     if not token:
@@ -382,6 +416,15 @@ def resolve_product():
         if not og:
             return jsonify({"error": "og:image nao encontrada", "status": r.status_code}), 404
         img = og.group(1).replace("http://", "https://")
+        # Nome do produto (og:title ou <title>). Usado pra detectar oversized/slim/etc.
+        og_title = re.search(r'<meta\s+property=["\']og:title["\']\s+content=["\']([^"\']+)["\']', html, re.I)
+        if not og_title:
+            og_title = re.search(r'<meta\s+content=["\']([^"\']+)["\']\s+property=["\']og:title["\']', html, re.I)
+        if og_title:
+            product_name = og_title.group(1).strip()[:200]
+        else:
+            title_m = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
+            product_name = (title_m.group(1).strip() if title_m else "")[:200]
         # tenta substituir versao -640- por -1024- pra qualidade maior, mas VALIDA antes
         hd_candidate = re.sub(r"-640-0\.(webp|jpg|jpeg|png)$", r"-1024-0.\1", img, flags=re.I)
         hd = img  # default 640
@@ -407,13 +450,247 @@ def resolve_product():
             suggested = "lower_body"
         else:
             suggested = "upper_body"
-        payload = {"image_url": img, "image_url_hd": hd, "suggested_category": suggested}
+        payload = {"image_url": img, "image_url_hd": hd, "suggested_category": suggested, "product_name": product_name}
         _resolve_set(url, payload)
         out = dict(payload)
         out["_cache"] = "miss"
         return jsonify(out)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# ---------------------------------------------------------
+# Recomendacao de tamanho (piloto v0).
+# Regra simples: tamanho usual + palavra-chave no nome do produto -> 3 caimentos.
+# Sem Vision, sem tabela por peca. Feedback loop refina peca-a-peca.
+# ---------------------------------------------------------
+_SIZE_GRADE = ["PP", "P", "M", "G", "GG", "XG"]  # grade padrao Martina (extensivel via env por tenant)
+_OVERSIZED_KWS = ["oversized", "over size", "over-sized", "overs", " over ", "boxy", "amplo", "amplinho"]
+_SLIM_KWS = ["slim", "skinny", "justa", "justo", "colada", "colado", "aderente", "canelado", "canelada", "segunda pele"]
+
+def _size_shift(size, delta):
+    """Retorna tamanho +/- delta na grade. Clamp nas extremidades."""
+    if size not in _SIZE_GRADE:
+        return size
+    idx = _SIZE_GRADE.index(size)
+    new_idx = max(0, min(len(_SIZE_GRADE) - 1, idx + delta))
+    return _SIZE_GRADE[new_idx]
+
+def _detect_fit_type(product_name):
+    """Retorna 'oversized' | 'slim' | 'regular' baseado em palavras-chave do nome."""
+    if not product_name:
+        return "regular"
+    low = " " + product_name.lower() + " "
+    if any(k in low for k in _OVERSIZED_KWS):
+        return "oversized"
+    if any(k in low for k in _SLIM_KWS):
+        return "slim"
+    return "regular"
+
+def _apply_feedback_shift(tenant, product_url, size_declared):
+    """
+    Ajuste dinamico: se >=3 feedbacks de usuarios com mesmo tamanho declarado deram 'apertado'
+    em maioria absoluta, sugere +1. Se 'largo', sugere -1. Empate/pouco dado = 0.
+    """
+    try:
+        with _db() as c:
+            rows = c.execute("""
+                SELECT feedback, COUNT(*) as n
+                FROM size_feedback
+                WHERE tenant=? AND product_url=? AND size_declared=?
+                GROUP BY feedback
+            """, (tenant, product_url, size_declared)).fetchall()
+        counts = {r[0]: r[1] for r in rows}
+        total = sum(counts.values())
+        if total < 3:
+            return 0
+        apertado = counts.get("apertado", 0)
+        largo = counts.get("largo", 0)
+        if apertado > (total / 2):
+            return +1
+        if largo > (total / 2):
+            return -1
+    except Exception:
+        pass
+    return 0
+
+@app.route("/size-recommendation", methods=["POST", "OPTIONS"])
+def size_recommendation():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"error": "origin nao autorizado"}), 403
+    if not _check_rate_limit(_client_ip(), limit_per_min=60, limit_per_hour=600):
+        return jsonify({"error": "rate limit"}), 429
+
+    # aceita JSON ou form; sendBeacon manda text/plain com JSON
+    body = request.get_json(silent=True)
+    if body is None:
+        try:
+            body = json.loads(request.get_data(as_text=True) or "{}")
+        except Exception:
+            body = {}
+    tenant = (body.get("tenant") or "martina")[:32]
+    product_url = (body.get("product_url") or "").strip()[:500]
+    product_name = (body.get("product_name") or "").strip()[:200]
+    category = (body.get("category") or "upper_body")[:32]
+    size_declared = (body.get("size_declared") or "").strip().upper()[:8]
+    user_hash = (body.get("user_hash") or "")[:64]
+
+    if not product_url:
+        return jsonify({"error": "product_url obrigatorio"}), 400
+
+    # Se nao mandou size_declared, tenta puxar do perfil
+    if not size_declared and user_hash:
+        try:
+            with _db() as c:
+                row = c.execute(
+                    "SELECT size_top, size_bottom, size_dress FROM user_profiles WHERE tenant=? AND user_hash=?",
+                    (tenant, user_hash)
+                ).fetchone()
+            if row:
+                if category == "dresses":
+                    size_declared = (row[2] or "").upper()
+                elif category == "lower_body":
+                    size_declared = (row[1] or "").upper()
+                else:
+                    size_declared = (row[0] or "").upper()
+        except Exception:
+            pass
+
+    fit_type = _detect_fit_type(product_name)
+    profile_status = "complete" if size_declared in _SIZE_GRADE else "empty"
+
+    if profile_status == "empty":
+        # Sem tamanho usual: sugere M (mediano) com baixa confianca. Nunca trava.
+        base = "M"
+        confidence = "low"
+        reason = "sem seu tamanho usual, sugerimos o padrao da marca — nos diga seu tamanho pra afinar"
+    else:
+        # regular: 0. oversized: -1 (peca ja veste maior, tira 1). slim: +1 (veste menor, soma 1).
+        delta_by_fit = {"regular": 0, "oversized": -1, "slim": +1}[fit_type]
+        # feedback dinamico ajusta ainda mais
+        delta_by_feedback = _apply_feedback_shift(tenant, product_url, size_declared)
+        total_delta = delta_by_fit + delta_by_feedback
+        base = _size_shift(size_declared, total_delta)
+        confidence = "high" if delta_by_feedback != 0 else "medium"
+        if fit_type == "oversized":
+            reason = f"essa peca e oversized, entao tira 1 do seu {size_declared}"
+        elif fit_type == "slim":
+            reason = f"essa peca veste justa, entao soma 1 no seu {size_declared}"
+        else:
+            reason = f"caimento regular — sugerimos seu tamanho usual"
+        if delta_by_feedback != 0:
+            reason += " (ajustado por feedback de outras clientes)"
+
+    # 3 caimentos: colado (-1), ideal (base), soltinho (+1)
+    return jsonify({
+        "size_ideal": base,
+        "size_colado": _size_shift(base, -1),
+        "size_soltinho": _size_shift(base, +1),
+        "confidence": confidence,
+        "reason": reason,
+        "fit_type": fit_type,
+        "profile_status": profile_status,
+        "category": category,
+    })
+
+@app.route("/profile", methods=["GET", "POST", "OPTIONS"])
+def user_profile():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"error": "origin nao autorizado"}), 403
+    tenant = (request.args.get("tenant") or "martina")[:32]
+    user_hash = (request.args.get("user_hash") or "")[:64]
+    if not user_hash:
+        return jsonify({"error": "user_hash obrigatorio"}), 400
+
+    if request.method == "GET":
+        with _db() as c:
+            row = c.execute(
+                "SELECT size_top, size_bottom, size_dress, fit_pref FROM user_profiles WHERE tenant=? AND user_hash=?",
+                (tenant, user_hash)
+            ).fetchone()
+        if not row:
+            return jsonify({"exists": False})
+        return jsonify({
+            "exists": True,
+            "size_top": row[0], "size_bottom": row[1], "size_dress": row[2], "fit_pref": row[3]
+        })
+
+    # POST: upsert
+    if not _check_rate_limit(_client_ip(), limit_per_min=20, limit_per_hour=200):
+        return jsonify({"error": "rate limit"}), 429
+    body = request.get_json(silent=True)
+    if body is None:
+        try:
+            body = json.loads(request.get_data(as_text=True) or "{}")
+        except Exception:
+            body = {}
+
+    def _valid_size(s):
+        return (s or "").strip().upper() if (s or "").strip().upper() in _SIZE_GRADE else None
+    def _valid_fit(f):
+        return f if f in ("colado", "ideal", "soltinho") else None
+
+    with _DB_LOCK, _db() as c:
+        c.execute("""
+            INSERT INTO user_profiles (tenant, user_hash, size_top, size_bottom, size_dress, fit_pref, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant, user_hash) DO UPDATE SET
+                size_top = COALESCE(excluded.size_top, size_top),
+                size_bottom = COALESCE(excluded.size_bottom, size_bottom),
+                size_dress = COALESCE(excluded.size_dress, size_dress),
+                fit_pref = COALESCE(excluded.fit_pref, fit_pref),
+                updated_at = excluded.updated_at
+        """, (
+            tenant, user_hash,
+            _valid_size(body.get("size_top")),
+            _valid_size(body.get("size_bottom")),
+            _valid_size(body.get("size_dress")),
+            _valid_fit(body.get("fit_pref")),
+            time.time()
+        ))
+    return jsonify({"ok": True})
+
+@app.route("/size-feedback", methods=["POST", "OPTIONS"])
+def size_feedback():
+    if request.method == "OPTIONS":
+        return ("", 204)
+    origin = request.headers.get("Origin", "")
+    if origin and not _origin_allowed(origin):
+        return jsonify({"error": "origin nao autorizado"}), 403
+    if not _check_rate_limit(_client_ip(), limit_per_min=30, limit_per_hour=200):
+        return jsonify({"error": "rate limit"}), 429
+    body = request.get_json(silent=True)
+    if body is None:
+        try:
+            body = json.loads(request.get_data(as_text=True) or "{}")
+        except Exception:
+            body = {}
+    fb = (body.get("feedback") or "").strip().lower()
+    if fb not in ("apertado", "ideal", "largo"):
+        return jsonify({"error": "feedback invalido"}), 400
+    with _DB_LOCK, _db() as c:
+        c.execute("""
+            INSERT INTO size_feedback (tenant, user_hash, product_url, product_name, garment_category,
+                                       size_declared, size_suggested, size_tried, feedback, ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            (body.get("tenant") or "martina")[:32],
+            (body.get("user_hash") or "")[:64],
+            (body.get("product_url") or "")[:500],
+            (body.get("product_name") or "")[:200],
+            (body.get("category") or "")[:32],
+            (body.get("size_declared") or "").upper()[:8],
+            (body.get("size_suggested") or "").upper()[:8],
+            (body.get("size_tried") or "").upper()[:8],
+            fb,
+            time.time()
+        ))
+    return jsonify({"ok": True})
 
 # ---------------------------------------------------------
 # /widget.js — serve o widget pra Martina (e futuras lojas)
