@@ -717,6 +717,45 @@ def widget_js():
                     })
 
 # ---------------------------------------------------------
+# /hotsale-price.js — script servido pra Nuvemshop (que rejeita inline).
+# Substitui na listagem /sale/ o preco padrao pelo menor preco entre variantes.
+# ---------------------------------------------------------
+_HOTSALE_PRICE_JS = r"""/* HOTSALE menor preco listagem — servido de martina-tryon */
+(function(){
+  if(!/\/sale\/?/i.test(location.pathname)) return;
+  function run(){
+    var cs = document.querySelectorAll(".js-product-container[data-variants]");
+    cs.forEach(function(c){
+      if (c.dataset.mtsMinDone) return;
+      try {
+        var vs = JSON.parse(c.getAttribute("data-variants") || "[]");
+        var av = vs.filter(function(v){ return v.available && v.price_number > 0; });
+        if (!av.length) return;
+        var eP = function(v){ return v.promotional_price_number || v.price_number; };
+        var ch = av.reduce(function(a,b){ return eP(a) < eP(b) ? a : b; });
+        var cp = eP(ch);
+        var el = c.querySelector(".js-price-display.item-price");
+        if (!el) return;
+        var cur = parseFloat((el.textContent||"").replace(/[^0-9,]/g,"").replace(",","."));
+        if (isNaN(cur)) return;
+        if (cp < cur - 0.01) el.textContent = "R$" + cp.toFixed(2).replace(".",",");
+        c.dataset.mtsMinDone = "1";
+      } catch(e){}
+    });
+  }
+  [0, 500, 1500, 3000, 6000].forEach(function(m){ setTimeout(run, m); });
+})();
+"""
+
+@app.route("/hotsale-price.js", methods=["GET"])
+def hotsale_price_js():
+    return Response(_HOTSALE_PRICE_JS, mimetype="application/javascript; charset=utf-8",
+                    headers={
+                        "Cache-Control": "public, max-age=300",
+                        "Access-Control-Allow-Origin": "*",
+                    })
+
+# ---------------------------------------------------------
 # /test — pagina HTML hospedada
 # ---------------------------------------------------------
 TEST_HTML = r"""<!doctype html>
