@@ -720,10 +720,14 @@ def widget_js():
 # /hotsale-price.js — script servido pra Nuvemshop (que rejeita inline).
 # Substitui na listagem /sale/ o preco padrao pelo menor preco entre variantes.
 # ---------------------------------------------------------
-_HOTSALE_PRICE_JS = r"""/* HOTSALE menor preco listagem — servido de martina-tryon */
+_HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar variante mais barata na PDP */
 (function(){
-  if(!/\/sale\/?/i.test(location.pathname)) return;
-  function run(){
+  var isSale = /\/sale\/?/i.test(location.pathname);
+  var isPdp = /\/produtos\/[^\/?#]+\/?/.test(location.pathname);
+  var qs = new URLSearchParams(location.search);
+  var wantedSize = qs.get("mts_size");  // ?mts_size=P
+
+  function runList(){
     var cs = document.querySelectorAll(".js-product-container[data-variants]");
     cs.forEach(function(c){
       if (c.dataset.mtsMinDone) return;
@@ -734,16 +738,45 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE menor preco listagem — servido de martina-t
         var eP = function(v){ return v.promotional_price_number || v.price_number; };
         var ch = av.reduce(function(a,b){ return eP(a) < eP(b) ? a : b; });
         var cp = eP(ch);
+        // 1) substituir preco exibido pelo minimo
         var el = c.querySelector(".js-price-display.item-price");
-        if (!el) return;
-        var cur = parseFloat((el.textContent||"").replace(/[^0-9,]/g,"").replace(",","."));
-        if (isNaN(cur)) return;
-        if (cp < cur - 0.01) el.textContent = "R$" + cp.toFixed(2).replace(".",",");
+        if (el) {
+          var cur = parseFloat((el.textContent||"").replace(/[^0-9,]/g,"").replace(",","."));
+          if (!isNaN(cur) && cp < cur - 0.01) {
+            el.textContent = "R$" + cp.toFixed(2).replace(".",",");
+          }
+        }
+        // 2) adicionar ?mts_size=<opt0> nos links do card (leva pra PDP ja com variante certa)
+        if (ch.option0) {
+          var links = c.querySelectorAll('a[href*="/produtos/"]');
+          links.forEach(function(a){
+            try {
+              var u = new URL(a.href, location.origin);
+              u.searchParams.set("mts_size", ch.option0);
+              a.href = u.toString();
+            } catch(e){}
+          });
+        }
         c.dataset.mtsMinDone = "1";
       } catch(e){}
     });
   }
-  [0, 500, 1500, 3000, 6000].forEach(function(m){ setTimeout(run, m); });
+
+  function runPdp(){
+    if (!wantedSize) return;
+    var s = document.querySelector("#variation_1, select[name='variation[0]']");
+    if (!s) return;
+    // opcao com value == wantedSize
+    var opt = Array.prototype.find.call(s.options, function(o){ return o.value === wantedSize; });
+    if (!opt) return;
+    if (s.value !== wantedSize) {
+      s.value = wantedSize;
+      s.dispatchEvent(new Event("change", {bubbles:true}));
+    }
+  }
+
+  function tick(){ if (isSale) runList(); if (isPdp) runPdp(); }
+  [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
 """
 
