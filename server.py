@@ -720,12 +720,19 @@ def widget_js():
 # /hotsale-price.js — script servido pra Nuvemshop (que rejeita inline).
 # Substitui na listagem /sale/ o preco padrao pelo menor preco entre variantes.
 # ---------------------------------------------------------
-_HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar variante mais barata na PDP */
+_HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar variante mais barata na PDP + fix header cover */
 (function(){
   var isSale = /\/sale\/?/i.test(location.pathname);
   var isPdp = /\/produtos\/[^\/?#]+\/?/.test(location.pathname);
   var qs = new URLSearchParams(location.search);
   var wantedSize = qs.get("mts_size");  // ?mts_size=P
+
+  // Fix: header fixed cobria titulo+preco na PDP. Injeta padding-top no container.
+  if (isPdp) {
+    var st = document.createElement("style");
+    st.textContent = ".js-sticky-product.product-detail-container{padding-top:90px}";
+    document.head.appendChild(st);
+  }
 
   function runList(){
     var cs = document.querySelectorAll(".js-product-container[data-variants]");
