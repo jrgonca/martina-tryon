@@ -720,10 +720,11 @@ def widget_js():
 # /hotsale-price.js — script servido pra Nuvemshop (que rejeita inline).
 # Substitui na listagem /sale/ o preco padrao pelo menor preco entre variantes.
 # ---------------------------------------------------------
-_HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar variante mais barata na PDP + fix header cover */
+_HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar variante mais barata na PDP + fix header cover + banner home clicavel */
 (function(){
   var isSale = /\/sale\/?/i.test(location.pathname);
   var isPdp = /\/produtos\/[^\/?#]+\/?/.test(location.pathname);
+  var isHome = location.pathname === "/" || location.pathname === "";
   var qs = new URLSearchParams(location.search);
   var wantedSize = qs.get("mts_size");  // ?mts_size=P
 
@@ -732,6 +733,25 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     var st = document.createElement("style");
     st.textContent = ".js-sticky-product.product-detail-container{padding-top:90px}";
     document.head.appendChild(st);
+  }
+
+  // Home: banner do video vira link pra /sale/ (HOTSALE)
+  function runHome(){
+    var vid = document.querySelector("video[autoplay], video[muted], video");
+    if (!vid) return;
+    var box = vid.closest("a") || vid.closest(".banner, .hero, .home-banner, section") || vid.parentElement;
+    if (!box || box.dataset.mtsHot) return;
+    box.dataset.mtsHot = "1";
+    box.style.cursor = "pointer";
+    if (box.tagName === "A") {
+      box.href = "/sale/";
+    } else {
+      box.addEventListener("click", function(e){
+        // se clique for num controle nativo do video (raro pq nao tem controls), ignora
+        if (e.target && e.target.matches && e.target.matches("button, a, input, select")) return;
+        location.href = "/sale/";
+      });
+    }
   }
 
   function runList(){
@@ -782,7 +802,7 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     }
   }
 
-  function tick(){ if (isSale) runList(); if (isPdp) runPdp(); }
+  function tick(){ if (isSale) runList(); if (isPdp) runPdp(); if (isHome) runHome(); }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
 """
