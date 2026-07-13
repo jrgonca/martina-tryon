@@ -802,6 +802,15 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     }
   }
 
+  // PDP: carrega dinamicamente o widget do quiz de tamanho
+  if (isPdp && !document.getElementById("mts-sizequiz-loader")) {
+    var sq = document.createElement("script");
+    sq.id = "mts-sizequiz-loader";
+    sq.src = "https://martina-tryon.onrender.com/size-quiz.js";
+    sq.async = true;
+    document.head.appendChild(sq);
+  }
+
   function tick(){ if (isSale) runList(); if (isPdp) runPdp(); if (isHome) runHome(); }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
@@ -810,6 +819,333 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
 @app.route("/hotsale-price.js", methods=["GET"])
 def hotsale_price_js():
     return Response(_HOTSALE_PRICE_JS, mimetype="application/javascript; charset=utf-8",
+                    headers={
+                        "Cache-Control": "public, max-age=300",
+                        "Access-Control-Allow-Origin": "*",
+                    })
+
+# ---------------------------------------------------------
+# /size-quiz.js — widget quiz de tamanho na PDP
+# ---------------------------------------------------------
+_SIZE_QUIZ_JS = r"""/* Martina Size Quiz — recomendacao de tamanho v0 */
+(function(){
+  if (window.__mtsSizeQuiz) return;
+  window.__mtsSizeQuiz = 1;
+  var API = "https://martina-tryon.onrender.com";
+  var TENANT = "martina";
+  var TOPS_SIZES = ["PP","P","M","G","GG","XG"];
+  var BOTTOM_SIZES = ["36","38","40","42","44","46","48"];
+  var FIT_OPTS = [
+    { id: "colado",   label: "Coladinho",  desc: "gosto de peca marcando o corpo" },
+    { id: "ideal",    label: "No jeito",   desc: "caimento padrao da marca" },
+    { id: "soltinho", label: "Soltinho",   desc: "peca mais folgada e confortavel" }
+  ];
+
+  function isPdp(){ return /\/produtos\/[^/?#]+\/?/.test(location.pathname); }
+  function detectCategory(){
+    var t = (document.title + " " + (document.querySelector("h1")||{textContent:""}).textContent).toLowerCase();
+    if (/vestid|dress/.test(t)) return "dresses";
+    if (/cal[cç]a|short|saia|jeans/.test(t)) return "lower_body";
+    return "upper_body";
+  }
+  function getUserHash(){
+    try {
+      var v = localStorage.getItem("mts_uh");
+      if (!v) { v = "u" + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("mts_uh", v); }
+      return v;
+    } catch(e){ return "anon"; }
+  }
+  function getProfile(){
+    try { return JSON.parse(localStorage.getItem("mts_profile") || "{}"); } catch(e){ return {}; }
+  }
+  function saveProfile(p){
+    try { localStorage.setItem("mts_profile", JSON.stringify(p)); } catch(e){}
+    // manda pro backend em paralelo (fire-and-forget)
+    try {
+      fetch(API + "/profile?tenant=" + TENANT + "&user_hash=" + encodeURIComponent(getUserHash()), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          size_top: p.size_top || null,
+          size_bottom: p.size_bottom || null,
+          size_dress: p.size_dress || p.size_top || null,
+          fit_pref: p.fit_pref || null
+        }),
+        keepalive: true
+      }).catch(function(){});
+    } catch(e){}
+  }
+  function track(ev, params){
+    try { if (window.dataLayer) window.dataLayer.push(Object.assign({ event: "size_" + ev }, params||{})); } catch(e){}
+  }
+  function findSizeSelect(){
+    return document.querySelector("#variation_1, select[name='variation[0]'], select[name*='tamanho' i], select[name*='size' i]");
+  }
+  function selectSize(size){
+    var s = findSizeSelect();
+    if (!s) return false;
+    var opt = Array.prototype.find.call(s.options, function(o){ return o.value === size || o.text.trim().toUpperCase() === size; });
+    if (!opt) return false;
+    s.value = opt.value;
+    s.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
+  // ---- ESTILO (scoped por prefixo .mtsq-) ----
+  var CSS = "" +
+    ".mtsq-btn{appearance:none;background:#fff;color:#111;border:1px solid #111;padding:11px 16px;font-size:12px;letter-spacing:.15em;text-transform:uppercase;font-weight:600;cursor:pointer;border-radius:6px;margin:12px 0;font-family:inherit;display:inline-flex;align-items:center;gap:8px;transition:background .15s}" +
+    ".mtsq-btn:hover{background:#111;color:#fff}" +
+    ".mtsq-profile-hint{font-size:11px;color:#666;margin:6px 0 0;letter-spacing:.04em}" +
+    ".mtsq-overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99997;display:flex;align-items:center;justify-content:center;padding:14px;animation:mtsqIn .18s ease-out}" +
+    "@keyframes mtsqIn{from{opacity:0}to{opacity:1}}" +
+    ".mtsq-modal{background:#fff;max-width:440px;width:100%;border-radius:14px;padding:24px 22px 20px;box-shadow:0 24px 60px rgba(0,0,0,.3);font-family:inherit;max-height:92vh;overflow-y:auto}" +
+    ".mtsq-h{display:flex;justify-content:space-between;align-items:flex-start;margin:0 0 6px}" +
+    ".mtsq-h h3{margin:0;font-size:15px;letter-spacing:.15em;text-transform:uppercase;font-weight:700;color:#111}" +
+    ".mtsq-h .mtsq-x{background:none;border:0;font-size:26px;color:#888;cursor:pointer;line-height:1;padding:0 4px}" +
+    ".mtsq-sub{color:#666;font-size:13px;margin:0 0 18px;line-height:1.4}" +
+    ".mtsq-q{margin:16px 0}" +
+    ".mtsq-q label{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#111;font-weight:700;margin:0 0 8px}" +
+    ".mtsq-sizes{display:flex;flex-wrap:wrap;gap:6px}" +
+    ".mtsq-sizes button{flex:1;min-width:48px;background:#fff;color:#111;border:1px solid #ddd;padding:10px 8px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;font-family:inherit;transition:all .15s;-webkit-tap-highlight-color:transparent}" +
+    ".mtsq-sizes button:hover{border-color:#111}" +
+    ".mtsq-sizes button.on{background:#111;color:#fff;border-color:#111}" +
+    ".mtsq-fits{display:flex;flex-direction:column;gap:8px}" +
+    ".mtsq-fits button{text-align:left;background:#fff;color:#111;border:1px solid #ddd;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .15s}" +
+    ".mtsq-fits button:hover{border-color:#111}" +
+    ".mtsq-fits button.on{background:#f7f7f7;border-color:#111}" +
+    ".mtsq-fits .fl{font-size:13px;font-weight:700;letter-spacing:.06em}" +
+    ".mtsq-fits .fd{font-size:11px;color:#666;margin-top:3px}" +
+    ".mtsq-go{width:100%;margin-top:18px;background:#111;color:#fff;border:0;padding:14px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;transition:opacity .15s}" +
+    ".mtsq-go:disabled{opacity:.4;cursor:not-allowed}" +
+    ".mtsq-result{padding:8px 0}" +
+    ".mtsq-big{text-align:center;padding:24px 0 18px}" +
+    ".mtsq-big .rt{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#666;margin:0 0 8px}" +
+    ".mtsq-big .rs{font-size:56px;font-weight:800;color:#111;letter-spacing:.05em;line-height:1}" +
+    ".mtsq-big .rc{font-size:11px;color:#666;margin-top:8px;letter-spacing:.05em;text-transform:uppercase}" +
+    ".mtsq-reason{background:#f8f8f8;border-radius:8px;padding:12px 14px;font-size:13px;color:#333;line-height:1.5;margin:0 0 12px}" +
+    ".mtsq-3fits{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:0 0 16px}" +
+    ".mtsq-3fits div{background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px 6px;text-align:center}" +
+    ".mtsq-3fits div.hi{border-color:#111;background:#fff}" +
+    ".mtsq-3fits .fl2{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;margin:0 0 4px}" +
+    ".mtsq-3fits .fs2{font-size:20px;font-weight:800;color:#111}" +
+    ".mtsq-3fits div.hi .fl2{color:#111;font-weight:700}" +
+    ".mtsq-apply{width:100%;background:#111;color:#fff;border:0;padding:14px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent}" +
+    ".mtsq-apply.done{background:#059669}" +
+    ".mtsq-restart{width:100%;background:none;color:#666;border:0;padding:10px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit;margin-top:6px}";
+
+  function ensureStyle(){
+    if (document.getElementById("mtsq-style")) return;
+    var s = document.createElement("style");
+    s.id = "mtsq-style";
+    s.textContent = CSS;
+    document.head.appendChild(s);
+  }
+
+  function findMount(){
+    return document.querySelector(".js-product-form, .product-form, [data-store='product-form'], .js-addtocart, form[action*='cart']") || null;
+  }
+
+  function injectButton(){
+    if (document.getElementById("mtsq-btn")) return;
+    ensureStyle();
+    var mount = findMount();
+    if (!mount) return;
+    var wrap = document.createElement("div");
+    wrap.id = "mtsq-wrap";
+    wrap.style.cssText = "margin:12px 0;text-align:center";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.id = "mtsq-btn";
+    btn.className = "mtsq-btn";
+    btn.innerHTML = '<span style="font-size:14px">✨</span> Descobrir meu tamanho';
+    btn.addEventListener("click", function(){ openQuiz(); });
+    wrap.appendChild(btn);
+
+    // dica se ja tem perfil
+    var p = getProfile();
+    if (p && (p.size_top || p.size_bottom)) {
+      var hint = document.createElement("div");
+      hint.className = "mtsq-profile-hint";
+      var seu = p.size_top || p.size_bottom;
+      hint.textContent = "Seu tamanho usual: " + seu + " · Toque pra ajustar";
+      wrap.appendChild(hint);
+    }
+    mount.parentElement.insertBefore(wrap, mount);
+    track("widget_shown");
+  }
+
+  var state = { size_top: null, size_bottom: null, fit_pref: null };
+
+  function openQuiz(){
+    track("widget_open");
+    var p = getProfile();
+    state.size_top = p.size_top || null;
+    state.size_bottom = p.size_bottom || null;
+    state.fit_pref = p.fit_pref || null;
+
+    var overlay = document.createElement("div");
+    overlay.className = "mtsq-overlay";
+    overlay.id = "mtsq-overlay";
+    overlay.addEventListener("click", function(e){ if (e.target === overlay) closeQuiz(); });
+    document.body.appendChild(overlay);
+    renderStep1(overlay);
+  }
+  function closeQuiz(){
+    var o = document.getElementById("mtsq-overlay");
+    if (o) o.remove();
+    // refresh dica do perfil no botao
+    var wrap = document.getElementById("mtsq-wrap");
+    if (wrap) { wrap.remove(); injectButton(); }
+  }
+
+  function renderStep1(overlay){
+    var category = detectCategory();
+    var isBottom = category === "lower_body";
+    var sizes = isBottom ? BOTTOM_SIZES : TOPS_SIZES;
+    var label = isBottom ? "Qual seu tamanho usual em calças?" : (category === "dresses" ? "Qual seu tamanho usual em vestidos?" : "Qual seu tamanho usual em blusas?");
+    var current = isBottom ? state.size_bottom : state.size_top;
+
+    var modal = document.createElement("div");
+    modal.className = "mtsq-modal";
+    modal.innerHTML =
+      '<div class="mtsq-h"><h3>Achar meu tamanho</h3><button class="mtsq-x" aria-label="Fechar">×</button></div>' +
+      '<p class="mtsq-sub">3 perguntinhas rapidas pra te ajudar.</p>' +
+      '<div class="mtsq-q">' +
+        '<label>' + label + '</label>' +
+        '<div class="mtsq-sizes" id="q1">' +
+          sizes.map(function(s){ return '<button data-v="' + s + '"' + (s===current ? ' class="on"' : '') + '>' + s + '</button>'; }).join("") +
+        '</div>' +
+      '</div>' +
+      '<div class="mtsq-q">' +
+        '<label>Como voce prefere que caia?</label>' +
+        '<div class="mtsq-fits" id="q2">' +
+          FIT_OPTS.map(function(f){ return '<button data-v="' + f.id + '"' + (f.id===state.fit_pref ? ' class="on"' : '') + '><div class="fl">' + f.label + '</div><div class="fd">' + f.desc + '</div></button>'; }).join("") +
+        '</div>' +
+      '</div>' +
+      '<button class="mtsq-go" id="mtsq-go" disabled>Ver minha recomendação</button>';
+    overlay.innerHTML = "";
+    overlay.appendChild(modal);
+
+    modal.querySelector(".mtsq-x").addEventListener("click", closeQuiz);
+
+    var q1 = modal.querySelector("#q1");
+    q1.addEventListener("click", function(e){
+      var b = e.target.closest("button[data-v]"); if (!b) return;
+      q1.querySelectorAll("button").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      var v = b.getAttribute("data-v");
+      if (isBottom) state.size_bottom = v; else state.size_top = v;
+      updateGo();
+    });
+    var q2 = modal.querySelector("#q2");
+    q2.addEventListener("click", function(e){
+      var b = e.target.closest("button[data-v]"); if (!b) return;
+      q2.querySelectorAll("button").forEach(function(x){ x.classList.remove("on"); });
+      b.classList.add("on");
+      state.fit_pref = b.getAttribute("data-v");
+      updateGo();
+    });
+    var go = modal.querySelector("#mtsq-go");
+    function updateGo(){
+      var sizeOk = isBottom ? !!state.size_bottom : !!state.size_top;
+      go.disabled = !(sizeOk && state.fit_pref);
+    }
+    updateGo();
+    go.addEventListener("click", function(){ submitQuiz(overlay); });
+  }
+
+  function submitQuiz(overlay){
+    var category = detectCategory();
+    var sizeDecl = category === "lower_body" ? state.size_bottom : state.size_top;
+    saveProfile({
+      size_top: state.size_top || null,
+      size_bottom: state.size_bottom || null,
+      size_dress: state.size_top || null,
+      fit_pref: state.fit_pref
+    });
+    var go = overlay.querySelector("#mtsq-go");
+    if (go){ go.disabled = true; go.textContent = "Calculando..."; }
+    track("recommendation_request", { size_declared: sizeDecl, fit_pref: state.fit_pref, category: category });
+
+    fetch(API + "/size-recommendation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tenant: TENANT,
+        product_url: location.href,
+        product_name: (document.querySelector("h1")||{textContent:""}).textContent.trim().slice(0,200),
+        category: category,
+        size_declared: sizeDecl,
+        user_hash: getUserHash()
+      })
+    })
+    .then(function(r){ return r.json(); })
+    .then(function(data){ renderResult(overlay, data, category, sizeDecl); })
+    .catch(function(e){
+      if (go){ go.disabled = false; go.textContent = "Ver minha recomendação"; }
+      alert("Erro ao calcular. Tente de novo.");
+    });
+  }
+
+  function renderResult(overlay, data, category, sizeDecl){
+    var pick = data.size_ideal;
+    if (state.fit_pref === "colado") pick = data.size_colado;
+    else if (state.fit_pref === "soltinho") pick = data.size_soltinho;
+
+    track("recommendation_shown", {
+      size_declared: sizeDecl,
+      size_ideal: data.size_ideal,
+      size_picked: pick,
+      confidence: data.confidence,
+      fit_type: data.fit_type
+    });
+
+    var modal = document.createElement("div");
+    modal.className = "mtsq-modal";
+    modal.innerHTML =
+      '<div class="mtsq-h"><h3>Sua recomendação</h3><button class="mtsq-x" aria-label="Fechar">×</button></div>' +
+      '<div class="mtsq-big">' +
+        '<div class="rt">Recomendamos</div>' +
+        '<div class="rs">' + pick + '</div>' +
+        '<div class="rc">Confiança: ' + (data.confidence === "high" ? "alta" : data.confidence === "medium" ? "media" : "baixa") + '</div>' +
+      '</div>' +
+      '<div class="mtsq-reason">' + (data.reason || "").replace(/</g,"&lt;") + '</div>' +
+      '<div class="mtsq-3fits">' +
+        '<div' + (state.fit_pref==="colado"?' class="hi"':'') + '><div class="fl2">Coladinho</div><div class="fs2">' + data.size_colado + '</div></div>' +
+        '<div' + (state.fit_pref==="ideal"?' class="hi"':'') + '><div class="fl2">No jeito</div><div class="fs2">' + data.size_ideal + '</div></div>' +
+        '<div' + (state.fit_pref==="soltinho"?' class="hi"':'') + '><div class="fl2">Soltinho</div><div class="fs2">' + data.size_soltinho + '</div></div>' +
+      '</div>' +
+      '<button class="mtsq-apply" id="mtsq-apply">Selecionar ' + pick + ' no produto</button>' +
+      '<button class="mtsq-restart" id="mtsq-restart">Refazer</button>';
+    overlay.innerHTML = "";
+    overlay.appendChild(modal);
+
+    modal.querySelector(".mtsq-x").addEventListener("click", closeQuiz);
+    modal.querySelector("#mtsq-restart").addEventListener("click", function(){ renderStep1(overlay); });
+    modal.querySelector("#mtsq-apply").addEventListener("click", function(){
+      var ok = selectSize(pick);
+      var b = modal.querySelector("#mtsq-apply");
+      if (ok){
+        b.textContent = "✓ " + pick + " selecionado";
+        b.classList.add("done");
+        track("size_applied", { size: pick });
+        setTimeout(closeQuiz, 900);
+      } else {
+        b.textContent = "Não achei o tamanho " + pick + " no produto";
+        b.style.background = "#dc2626";
+      }
+    });
+  }
+
+  // Init com retries porque o form da PDP aparece async no tema Idea
+  function tick(){ if (isPdp()) injectButton(); }
+  [0, 500, 1200, 2500, 5000].forEach(function(m){ setTimeout(tick, m); });
+})();
+"""
+
+@app.route("/size-quiz.js", methods=["GET"])
+def size_quiz_js():
+    return Response(_SIZE_QUIZ_JS, mimetype="application/javascript; charset=utf-8",
                     headers={
                         "Cache-Control": "public, max-age=300",
                         "Access-Control-Allow-Origin": "*",
