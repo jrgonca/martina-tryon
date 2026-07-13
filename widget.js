@@ -265,7 +265,60 @@ var STYLES = (
 '.result-actions.show{display:flex}' +
 '.btn-buy{flex:1;background:#111;color:#fff;border:0;padding:16px 20px;border-radius:10px;font-size:14px;letter-spacing:.2em;text-transform:uppercase;cursor:pointer;font-weight:700;min-height:54px;-webkit-tap-highlight-color:transparent;transition:transform .15s}' +
 '.btn-buy:active{transform:scale(.97)}' +
-'.btn-retry{flex:1;background:#fff;color:#111;border:1.5px solid #111;padding:16px 20px;border-radius:10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;font-weight:600;min-height:54px;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:6px}'
+'.btn-retry{flex:1;background:#fff;color:#111;border:1.5px solid #111;padding:16px 20px;border-radius:10px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;font-weight:600;min-height:54px;-webkit-tap-highlight-color:transparent;display:flex;align-items:center;justify-content:center;gap:6px}' +
+// ---- Tela inicial de escolha (Provar OU Medir tamanho)
+'#chooseView, #quizView, #quizResultView{display:none}' +
+'.modal[data-step="choose"] #cardPerson,.modal[data-step="choose"] #cardResult,.modal[data-step="choose"] #goRow{display:none}' +
+'.modal[data-step="choose"] #chooseView{display:block}' +
+'.modal[data-step="quiz"] #cardPerson,.modal[data-step="quiz"] #cardResult,.modal[data-step="quiz"] #goRow{display:none}' +
+'.modal[data-step="quiz"] #quizView{display:block}' +
+'.modal[data-step="quiz-result"] #cardPerson,.modal[data-step="quiz-result"] #cardResult,.modal[data-step="quiz-result"] #goRow{display:none}' +
+'.modal[data-step="quiz-result"] #quizResultView{display:block}' +
+'.choose-wrap{max-width:640px;margin:0 auto;padding:6px 4px 12px}' +
+'.choose-sub{text-align:center;color:#666;font-size:13px;margin:0 0 22px;line-height:1.45}' +
+'.choose-grid{display:grid;grid-template-columns:1fr;gap:12px}' +
+'@media(min-width:640px){.choose-grid{grid-template-columns:1fr 1fr;gap:16px}}' +
+'.choose-card{background:#fff;border:1.5px solid #eee;border-radius:14px;padding:24px 20px;cursor:pointer;text-align:center;transition:all .18s;-webkit-tap-highlight-color:transparent;min-height:220px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}' +
+'.choose-card:hover,.choose-card:focus{border-color:#111;background:#fafafa;transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.08)}' +
+'.choose-card .cc-ico{width:52px;height:52px;display:inline-flex;align-items:center;justify-content:center;background:#111;color:#fff;border-radius:99px;font-size:24px;margin-bottom:6px}' +
+'.choose-card h4{margin:0;font-size:14px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;color:#111}' +
+'.choose-card p{margin:2px 0 0;font-size:12px;color:#666;line-height:1.4;max-width:220px}' +
+// ---- Quiz de tamanho
+'.quiz-wrap{max-width:460px;margin:0 auto;padding:6px 4px 4px}' +
+'.quiz-sub{text-align:center;color:#666;font-size:13px;margin:0 0 18px;line-height:1.4}' +
+'.quiz-q{margin:14px 0}' +
+'.quiz-q label{display:block;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#111;font-weight:700;margin:0 0 8px}' +
+'.quiz-sizes{display:flex;flex-wrap:wrap;gap:6px}' +
+'.quiz-sizes button{flex:1;min-width:48px;background:#fff;color:#111;border:1px solid #ddd;padding:11px 8px;border-radius:6px;cursor:pointer;font-size:14px;font-weight:600;font-family:inherit;transition:all .15s;-webkit-tap-highlight-color:transparent}' +
+'.quiz-sizes button:hover{border-color:#111}' +
+'.quiz-sizes button.on{background:#111;color:#fff;border-color:#111}' +
+'.quiz-fits{display:flex;flex-direction:column;gap:8px}' +
+'.quiz-fits button{text-align:left;background:#fff;color:#111;border:1px solid #ddd;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:inherit;transition:all .15s;-webkit-tap-highlight-color:transparent}' +
+'.quiz-fits button:hover{border-color:#111}' +
+'.quiz-fits button.on{background:#f7f7f7;border-color:#111}' +
+'.quiz-fits .fl{font-size:13px;font-weight:700;letter-spacing:.06em;display:block}' +
+'.quiz-fits .fd{font-size:11px;color:#666;margin-top:3px}' +
+'.quiz-go{width:100%;margin-top:18px;background:#111;color:#fff;border:0;padding:15px;font-size:13px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;border-radius:10px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;min-height:52px}' +
+'.quiz-go:disabled{opacity:.35;cursor:not-allowed}' +
+// ---- Resultado do quiz
+'.quiz-result-wrap{max-width:460px;margin:0 auto;padding:6px 4px 4px}' +
+'.quiz-big{text-align:center;padding:22px 0 14px}' +
+'.quiz-big .rt{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:#666;margin:0 0 8px}' +
+'.quiz-big .rs{font-size:64px;font-weight:800;color:#111;letter-spacing:.05em;line-height:1}' +
+'.quiz-big .rc{font-size:11px;color:#666;margin-top:10px;letter-spacing:.05em;text-transform:uppercase}' +
+'.quiz-reason{background:#f8f8f8;border-radius:8px;padding:12px 14px;font-size:13px;color:#333;line-height:1.5;margin:0 0 14px}' +
+'.quiz-3fits{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin:0 0 18px}' +
+'.quiz-3fits div{background:#fafafa;border:1px solid #eee;border-radius:6px;padding:10px 6px;text-align:center}' +
+'.quiz-3fits div.hi{border-color:#111;background:#fff}' +
+'.quiz-3fits .fl2{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:#888;margin:0 0 4px}' +
+'.quiz-3fits .fs2{font-size:20px;font-weight:800;color:#111}' +
+'.quiz-3fits div.hi .fl2{color:#111;font-weight:700}' +
+'.quiz-buy{width:100%;background:#111;color:#fff;border:0;padding:16px;font-size:14px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;border-radius:10px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;min-height:54px;transition:transform .15s}' +
+'.quiz-buy:active{transform:scale(.97)}' +
+'.quiz-buy.err{background:#dc2626}' +
+'.quiz-restart{width:100%;background:none;color:#666;border:0;padding:10px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit;margin-top:6px;-webkit-tap-highlight-color:transparent}' +
+// Loading interno do quiz
+'.quiz-loading{text-align:center;padding:40px 20px;color:#666;font-size:13px}'
 );
 var TPL = (
 '<style>' + STYLES + '</style>' +
@@ -276,6 +329,47 @@ var TPL = (
 '<div class="modal" role="dialog" aria-label="Provador virtual">' +
 '<div class="head"><h2>Provador Virtual</h2><button id="close" aria-label="Fechar">×</button></div>' +
 '<div class="body">' +
+// Tela inicial de escolha
+'<div id="chooseView" class="choose-wrap">' +
+'<p class="choose-sub">Escolhe como quer usar o provador:</p>' +
+'<div class="choose-grid">' +
+'<button class="choose-card" id="chooseTryOn" type="button">' +
+'<div class="cc-ico">📸</div>' +
+'<h4>Provar virtualmente</h4>' +
+'<p>Envie sua foto e veja como a peça fica em você usando IA</p>' +
+'</button>' +
+'<button class="choose-card" id="chooseSize" type="button">' +
+'<div class="cc-ico">📏</div>' +
+'<h4>Descobrir meu tamanho</h4>' +
+'<p>3 perguntas rápidas pra descobrir o tamanho ideal pra você</p>' +
+'</button>' +
+'</div>' +
+'</div>' +
+// Tela do quiz (3 perguntas)
+'<div id="quizView" class="quiz-wrap">' +
+'<p class="quiz-sub">3 perguntinhas pra achar seu tamanho.</p>' +
+'<div class="quiz-q">' +
+'<label id="quizSizeLabel">Qual seu tamanho usual em blusas?</label>' +
+'<div class="quiz-sizes" id="quizSizes"></div>' +
+'</div>' +
+'<div class="quiz-q">' +
+'<label>Como voce prefere que caia?</label>' +
+'<div class="quiz-fits" id="quizFits"></div>' +
+'</div>' +
+'<button class="quiz-go" id="quizGo" type="button" disabled>Ver minha recomendação</button>' +
+'</div>' +
+// Tela resultado do quiz
+'<div id="quizResultView" class="quiz-result-wrap">' +
+'<div class="quiz-big">' +
+'<div class="rt">Recomendamos</div>' +
+'<div class="rs" id="qrSize">M</div>' +
+'<div class="rc" id="qrConf">Confiança: alta</div>' +
+'</div>' +
+'<div class="quiz-reason" id="qrReason"></div>' +
+'<div class="quiz-3fits" id="qr3fits"></div>' +
+'<button class="quiz-buy" id="qrBuy" type="button">Comprar agora</button>' +
+'<button class="quiz-restart" id="qrRestart" type="button">Refazer</button>' +
+'</div>' +
 '<div class="grid">' +
 '<div class="card" id="cardPerson">' +
 '<h3>Sua foto</h3>' +
@@ -380,11 +474,190 @@ $('#trigger').addEventListener('click', function () {
 track('open', { product: state.garmentInfo && state.garmentInfo.name });
 emit('tryon_open');
 $('#overlay').classList.add('show');
-goToStep(null);
+goToStep('choose'); // abre com tela de escolha
 resetResultUI();
 setStatus('Pronto.', 'ok');
 try { fetch(API_URL + '/', { method: 'GET', cache: 'no-store' }).catch(function(){}); } catch(e){}
 if (!state.garmentUrl) loadGarment();
+});
+
+// ---- Escolha inicial ----
+$('#chooseTryOn').addEventListener('click', function(){
+track('choose_tryon');
+goToStep(null); // volta pra fluxo atual (cardPerson visível)
+});
+$('#chooseSize').addEventListener('click', function(){
+track('choose_size_quiz');
+goToStep('quiz');
+renderQuizStep();
+});
+
+// ---- Quiz de tamanho (dentro do provador) ----
+var TOPS = ["PP","P","M","G","GG","XG"];
+var BOTTOMS = ["36","38","40","42","44","46","48"];
+var FITS = [
+{ id: "colado", label: "Coladinho", desc: "gosto de peca marcando o corpo" },
+{ id: "ideal", label: "No jeito", desc: "caimento padrao da marca" },
+{ id: "soltinho", label: "Soltinho", desc: "peca mais folgada e confortavel" }
+];
+var quizState = { size: null, fit: null, category: null, isBottom: false };
+
+function detectCategoryLocal(){
+var t = (document.title + " " + ((document.querySelector("h1")||{}).textContent || "")).toLowerCase();
+if (/vestid|dress/.test(t)) return "dresses";
+if (/cal[cç]a|short|saia|jeans/.test(t)) return "lower_body";
+return "upper_body";
+}
+function getUserHashLocal(){
+try {
+var v = localStorage.getItem("mts_uh");
+if (!v) { v = "u" + Math.random().toString(36).slice(2) + Date.now().toString(36); localStorage.setItem("mts_uh", v); }
+return v;
+} catch(e){ return "anon"; }
+}
+function getProfileLocal(){ try { return JSON.parse(localStorage.getItem("mts_profile") || "{}"); } catch(e){ return {}; } }
+function saveProfileLocal(p){
+try { localStorage.setItem("mts_profile", JSON.stringify(p)); } catch(e){}
+try {
+fetch(API_URL + "/profile?tenant=martina&user_hash=" + encodeURIComponent(getUserHashLocal()), {
+method: "POST",
+headers: { "Content-Type": "application/json" },
+body: JSON.stringify({
+size_top: p.size_top || null,
+size_bottom: p.size_bottom || null,
+size_dress: p.size_dress || p.size_top || null,
+fit_pref: p.fit_pref || null
+}),
+keepalive: true
+}).catch(function(){});
+} catch(e){}
+}
+
+function renderQuizStep(){
+quizState.category = detectCategoryLocal();
+quizState.isBottom = quizState.category === "lower_body";
+var sizes = quizState.isBottom ? BOTTOMS : TOPS;
+var label = quizState.isBottom ? "Qual seu tamanho usual em calças?"
+: (quizState.category === "dresses" ? "Qual seu tamanho usual em vestidos?" : "Qual seu tamanho usual em blusas?");
+$('#quizSizeLabel').textContent = label;
+var p = getProfileLocal();
+quizState.size = (quizState.isBottom ? p.size_bottom : p.size_top) || null;
+quizState.fit = p.fit_pref || null;
+// render size buttons
+var sizesEl = $('#quizSizes');
+sizesEl.innerHTML = sizes.map(function(s){
+return '<button type="button" data-v="' + s + '"' + (s===quizState.size ? ' class="on"' : '') + '>' + s + '</button>';
+}).join('');
+sizesEl.onclick = function(e){
+var b = e.target.closest('button[data-v]'); if (!b) return;
+sizesEl.querySelectorAll('button').forEach(function(x){ x.classList.remove('on'); });
+b.classList.add('on');
+quizState.size = b.getAttribute('data-v');
+updateQuizGo();
+};
+// render fit buttons
+var fitsEl = $('#quizFits');
+fitsEl.innerHTML = FITS.map(function(f){
+return '<button type="button" data-v="' + f.id + '"' + (f.id===quizState.fit ? ' class="on"' : '') + '><span class="fl">' + f.label + '</span><div class="fd">' + f.desc + '</div></button>';
+}).join('');
+fitsEl.onclick = function(e){
+var b = e.target.closest('button[data-v]'); if (!b) return;
+fitsEl.querySelectorAll('button').forEach(function(x){ x.classList.remove('on'); });
+b.classList.add('on');
+quizState.fit = b.getAttribute('data-v');
+updateQuizGo();
+};
+updateQuizGo();
+}
+function updateQuizGo(){
+$('#quizGo').disabled = !(quizState.size && quizState.fit);
+}
+
+$('#quizGo').addEventListener('click', function(){
+if (!quizState.size || !quizState.fit) return;
+var btn = $('#quizGo');
+btn.disabled = true; btn.textContent = 'Calculando…';
+// salva perfil
+saveProfileLocal({
+size_top: quizState.isBottom ? null : quizState.size,
+size_bottom: quizState.isBottom ? quizState.size : null,
+size_dress: quizState.isBottom ? null : quizState.size,
+fit_pref: quizState.fit
+});
+track('quiz_submit', { size: quizState.size, fit: quizState.fit, category: quizState.category });
+
+fetch(API_URL + '/size-recommendation', {
+method: 'POST',
+headers: { 'Content-Type': 'application/json' },
+body: JSON.stringify({
+tenant: 'martina',
+product_url: location.href,
+product_name: (state.garmentInfo && state.garmentInfo.name) || '',
+category: quizState.category,
+size_declared: quizState.size,
+user_hash: getUserHashLocal()
+})
+})
+.then(function(r){ return r.json(); })
+.then(function(data){
+btn.disabled = false; btn.textContent = 'Ver minha recomendação';
+renderQuizResult(data);
+})
+.catch(function(){
+btn.disabled = false; btn.textContent = 'Ver minha recomendação';
+setStatus('Erro ao calcular. Tenta de novo.', 'err');
+});
+});
+
+function renderQuizResult(data){
+var pick = data.size_ideal;
+if (quizState.fit === 'colado') pick = data.size_colado;
+else if (quizState.fit === 'soltinho') pick = data.size_soltinho;
+quizState.picked = pick;
+
+$('#qrSize').textContent = pick;
+$('#qrConf').textContent = 'Confiança: ' + (data.confidence === 'high' ? 'alta' : data.confidence === 'medium' ? 'média' : 'baixa');
+$('#qrReason').textContent = data.reason || '';
+$('#qr3fits').innerHTML =
+'<div' + (quizState.fit==='colado'?' class="hi"':'') + '><div class="fl2">Coladinho</div><div class="fs2">' + data.size_colado + '</div></div>' +
+'<div' + (quizState.fit==='ideal'?' class="hi"':'') + '><div class="fl2">No jeito</div><div class="fs2">' + data.size_ideal + '</div></div>' +
+'<div' + (quizState.fit==='soltinho'?' class="hi"':'') + '><div class="fl2">Soltinho</div><div class="fs2">' + data.size_soltinho + '</div></div>';
+$('#qrBuy').textContent = 'Comprar tamanho ' + pick;
+$('#qrBuy').classList.remove('err');
+goToStep('quiz-result');
+track('quiz_result', { size_picked: pick, confidence: data.confidence });
+emit('tryon_size_recommendation', { size_declared: quizState.size, fit_pref: quizState.fit, size_picked: pick });
+}
+
+function selectVariantSize(size){
+var s = document.querySelector("#variation_1, select[name='variation[0]'], select[name*='tamanho' i], select[name*='size' i]");
+if (!s) return false;
+var opt = Array.prototype.find.call(s.options, function(o){ return o.value === size || o.text.trim().toUpperCase() === size; });
+if (!opt) return false;
+s.value = opt.value;
+s.dispatchEvent(new Event('change', { bubbles: true }));
+return true;
+}
+
+$('#qrBuy').addEventListener('click', function(){
+var pick = quizState.picked;
+var ok = selectVariantSize(pick);
+var btn = $('#qrBuy');
+if (!ok) {
+btn.textContent = 'Não achei o tamanho ' + pick + ' — escolhe manualmente';
+btn.classList.add('err');
+track('quiz_buy_no_variant', { size: pick });
+return;
+}
+track('quiz_buy_click', { size: pick });
+emit('tryon_buy_click_from_quiz', { size_picked: pick });
+$('#overlay').classList.remove('show');
+stopCamera();
+setTimeout(scrollToBuy, 320);
+});
+$('#qrRestart').addEventListener('click', function(){
+goToStep('quiz');
+renderQuizStep();
 });
 function closeModal() {
 $('#overlay').classList.remove('show');

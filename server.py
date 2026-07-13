@@ -802,14 +802,8 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     }
   }
 
-  // PDP: carrega dinamicamente o widget do quiz de tamanho
-  if (isPdp && !document.getElementById("mts-sizequiz-loader")) {
-    var sq = document.createElement("script");
-    sq.id = "mts-sizequiz-loader";
-    sq.src = "https://martina-tryon.onrender.com/size-quiz.js";
-    sq.async = true;
-    document.head.appendChild(sq);
-  }
+  // (Quiz de tamanho agora vive DENTRO do provador virtual — widget.js integrado.
+  //  Endpoint /size-quiz.js mantido pra compat mas nao e mais carregado automaticamente.)
 
   function tick(){ if (isSale) runList(); if (isPdp) runPdp(); if (isHome) runHome(); }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
