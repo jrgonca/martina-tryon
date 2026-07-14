@@ -735,6 +735,39 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     document.head.appendChild(st);
   }
 
+  // ---- Badge pre-venda por produto ----
+  // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois) }
+  var PREVENDA_PRODUTOS = {
+    "jeans-oversized-black-dust-tvpi0": { texto: "📦 Pré-venda — envio a partir de 24/07", ate: "2026-07-24" }
+  };
+  function runPrevenda(){
+    if (!isPdp) return;
+    // slug da URL: /produtos/<slug>/
+    var m = location.pathname.match(/\/produtos\/([^\/?#]+)/);
+    if (!m) return;
+    var slug = m[1];
+    var cfg = PREVENDA_PRODUTOS[slug];
+    if (!cfg) return;
+    // sumiu se passou a data limite
+    if (cfg.ate){
+      try {
+        var lim = new Date(cfg.ate + "T23:59:59");
+        if (Date.now() > lim.getTime()) return;
+      } catch(e){}
+    }
+    if (document.getElementById("mts-prevenda")) return;
+    // ponto de ancoragem: acima do preco (fallback: acima do titulo)
+    var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
+    if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
+    if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
+    if (!anchor) return;
+    var box = document.createElement("div");
+    box.id = "mts-prevenda";
+    box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
+    box.textContent = cfg.texto;
+    anchor.parentElement.insertBefore(box, anchor);
+  }
+
   // Home: banner do video vira link pra /sale/ (HOTSALE)
   function runHome(){
     var vid = document.querySelector("video[autoplay], video[muted], video");
@@ -805,7 +838,7 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   // (Quiz de tamanho agora vive DENTRO do provador virtual — widget.js integrado.
   //  Endpoint /size-quiz.js mantido pra compat mas nao e mais carregado automaticamente.)
 
-  function tick(){ if (isSale) runList(); if (isPdp) runPdp(); if (isHome) runHome(); }
+  function tick(){ if (isSale) runList(); if (isPdp) { runPdp(); runPrevenda(); } if (isHome) runHome(); }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
 """
