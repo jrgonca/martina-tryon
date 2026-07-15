@@ -967,7 +967,9 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   // Estrategia: remover os artefatos qv + o data-qv-init do clone; o MutationObserver do
   // assortedJs re-inicializa o card com listeners vivos. Idempotente via __mtsQvFixed.
   function fixQvClones(){
-    if (!document.getElementById("martina-quickview-zara-js")) return; // qv ausente: nao mexe
+    // qv ausente: nao mexe. (Nao usar getElementById do <script> — a Nuvemshop pode remover
+    // o id ao injetar o assortedJs. A presenca de QUALQUER trigger/bar prova que o qv rodou.)
+    if (!document.querySelector(".martina-qv-trigger, .martina-qv-bar")) return;
     var dups = document.querySelectorAll(
       ".swiper-slide-duplicate [data-qv-init], .swiper-slide-duplicate[data-qv-init], " +
       ".slick-cloned [data-qv-init], .slick-cloned[data-qv-init]"
