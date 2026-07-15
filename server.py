@@ -736,7 +736,8 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   }
 
   // ---- Badge pre-venda por produto ----
-  // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois), avisoCompra }
+  // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois), avisoCompra,
+  //                 variantes (opcional: se presente, so age quando tamanho selecionado bater) }
   var PREVENDA_PRODUTOS = {
     "jeans-oversized-black-dust-tvpi0": {
       texto: "📦 Pré-venda 2º Lote - envio a partir de 27/07",
@@ -744,6 +745,17 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
       avisoCompra: {
         titulo: "Confirmar pré-venda",
         corpo: "Este produto está em pré-venda. O envio começa a partir de 27/07. Deseja continuar?",
+        btnOk: "Sim, quero comprar",
+        btnCancel: "Cancelar"
+      }
+    },
+    "jaqueta-de-couro1": {
+      texto: "📦 Tamanho P em pré-lançamento — envio a partir de 24/07",
+      ate: "2026-07-24",
+      variantes: ["P"],  // so o P dispara o modal; outras variantes compram normal
+      avisoCompra: {
+        titulo: "Confirmar pré-lançamento",
+        corpo: "O tamanho P desta jaqueta está em pré-lançamento. O envio começa a partir de 24/07. Deseja continuar?",
         btnOk: "Sim, quero comprar",
         btnCancel: "Cancelar"
       }
@@ -844,6 +856,13 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
           if (Date.now() > lim2.getTime()) return;
         } catch(e){}
       }
+      // Se cfg tem lista de variantes: so age quando tamanho selecionado bater
+      if (cfg2.variantes && cfg2.variantes.length) {
+        var tamSel = getSelectedSize(btn);
+        if (!tamSel) return; // sem tamanho selecionado (Nuvemshop provavelmente vai avisar), deixa passar
+        var alvo = cfg2.variantes.map(function(x){return String(x).trim().toUpperCase();});
+        if (alvo.indexOf(String(tamSel).trim().toUpperCase()) < 0) return; // tamanho nao esta na lista, deixa passar
+      }
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
@@ -852,6 +871,31 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
         try { btn.click(); } catch(e){}
       });
     }, true);
+  }
+
+  // Pega tamanho selecionado — funciona em PDP e vitrine (se o card tem quick-select)
+  function getSelectedSize(btn){
+    // PDP: select de variacao
+    var s = document.querySelector("#variation_1, select[name='variation[0]'], select[name*='tamanho' i], select[name*='size' i]");
+    if (s && s.value) {
+      var opt = s.options[s.selectedIndex];
+      return opt ? (opt.value || opt.text || "").trim() : s.value;
+    }
+    // PDP com botoes de tamanho (radio-like)
+    var sizeBtn = document.querySelector(".js-variation-option.active, .variation-option.active, [data-variation].active, .js-size.active");
+    if (sizeBtn) return (sizeBtn.getAttribute("data-value") || sizeBtn.textContent || "").trim();
+    // Vitrine: card tem link com ?mts_size=P
+    if (btn && btn.closest) {
+      var card = btn.closest(".js-product-container, .item-product, .product-item, article, .item");
+      if (card) {
+        var link = card.querySelector("a[href*='mts_size=']");
+        if (link) {
+          var lm = (link.getAttribute("href") || "").match(/[?&]mts_size=([^&#]+)/);
+          if (lm) return decodeURIComponent(lm[1]);
+        }
+      }
+    }
+    return null;
   }
 
   function showPrevendaModal(cfg, onConfirm){
