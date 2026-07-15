@@ -736,9 +736,18 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   }
 
   // ---- Badge pre-venda por produto ----
-  // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois) }
+  // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois), avisoCompra }
   var PREVENDA_PRODUTOS = {
-    "jeans-oversized-black-dust-tvpi0": { texto: "📦 Pré-venda — envio a partir de 24/07", ate: "2026-07-24" }
+    "jeans-oversized-black-dust-tvpi0": {
+      texto: "📦 Pré-venda — envio a partir de 24/07",
+      ate: "2026-07-24",
+      avisoCompra: {
+        titulo: "Confirmar pré-venda",
+        corpo: "Este produto está em pré-venda. O envio começa a partir de 24/07. Deseja continuar?",
+        btnOk: "Sim, quero comprar",
+        btnCancel: "Cancelar"
+      }
+    }
   };
   function runPrevenda(){
     if (!isPdp) return;
@@ -755,17 +764,68 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
         if (Date.now() > lim.getTime()) return;
       } catch(e){}
     }
-    if (document.getElementById("mts-prevenda")) return;
-    // ponto de ancoragem: acima do preco (fallback: acima do titulo)
-    var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
-    if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
-    if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
-    if (!anchor) return;
-    var box = document.createElement("div");
-    box.id = "mts-prevenda";
-    box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
-    box.textContent = cfg.texto;
-    anchor.parentElement.insertBefore(box, anchor);
+    // ---- BADGE VISUAL ----
+    if (!document.getElementById("mts-prevenda")) {
+      var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
+      if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
+      if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
+      if (anchor) {
+        var box = document.createElement("div");
+        box.id = "mts-prevenda";
+        box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
+        box.textContent = cfg.texto;
+        anchor.parentElement.insertBefore(box, anchor);
+      }
+    }
+
+    // ---- INTERCEPT DE CLIQUE NO COMPRAR (com confirmacao) ----
+    if (!cfg.avisoCompra || document.__mtsPrevendaHooked) return;
+    document.__mtsPrevendaHooked = true;
+    // capture phase pra rodar ANTES de qualquer handler nativo do tema/nuvemshop.
+    // Se cliente confirmar, disparamos click de novo com flag __mtsConfirmed pra deixar passar.
+    document.addEventListener("click", function(ev){
+      var t = ev.target;
+      if (!t || !t.closest) return;
+      // seletor de botoes de compra do tema Idea + Nuvemshop
+      var btn = t.closest(".js-addtocart:not(.js-addtocart-placeholder), .koba-add, .js-add-to-cart-button, button[name='add-cart'], [data-toggle-cart]");
+      if (!btn) return;
+      if (btn.__mtsConfirmed) { btn.__mtsConfirmed = false; return; } // segundo click programatico: deixa passar
+      // pre-venda? re-checar path (na SPA-like Nuvemshop o path pode ter mudado)
+      var m2 = location.pathname.match(/\/produtos\/([^\/?#]+)/);
+      if (!m2 || !PREVENDA_PRODUTOS[m2[1]]) return;
+      var cfg2 = PREVENDA_PRODUTOS[m2[1]];
+      if (!cfg2 || !cfg2.avisoCompra) return;
+      // trava o click
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      showPrevendaModal(cfg2.avisoCompra, function(){
+        btn.__mtsConfirmed = true;
+        // re-disparo click nativo: pixel/GA4/GTM continuam disparando normal via listeners deles
+        try { btn.click(); } catch(e){}
+      });
+    }, true);
+  }
+
+  function showPrevendaModal(cfg, onConfirm){
+    if (document.getElementById("mts-prev-modal")) return;
+    var ov = document.createElement("div");
+    ov.id = "mts-prev-modal";
+    ov.setAttribute("style", "position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;font-family:-apple-system,system-ui,'Jost',sans-serif");
+    var card = document.createElement("div");
+    card.setAttribute("style", "background:#fff;max-width:420px;width:100%;border-radius:14px;padding:26px 22px 22px;box-shadow:0 24px 60px rgba(0,0,0,.3);text-align:center;animation:mtsFade .18s ease-out");
+    card.innerHTML =
+      '<div style="font-size:38px;line-height:1;margin-bottom:12px">📦</div>' +
+      '<h3 style="margin:0 0 10px;font-size:16px;letter-spacing:.14em;text-transform:uppercase;font-weight:700;color:#111">' + cfg.titulo.replace(/</g,"&lt;") + '</h3>' +
+      '<p style="margin:0 0 22px;color:#555;font-size:14px;line-height:1.5">' + cfg.corpo.replace(/</g,"&lt;") + '</p>' +
+      '<button id="mts-prev-ok" style="width:100%;background:#111;color:#fff;border:0;padding:15px;font-size:13px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;-webkit-tap-highlight-color:transparent;min-height:52px">' + cfg.btnOk.replace(/</g,"&lt;") + '</button>' +
+      '<button id="mts-prev-cancel" style="width:100%;margin-top:8px;background:none;color:#666;border:0;padding:12px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;font-family:inherit">' + cfg.btnCancel.replace(/</g,"&lt;") + '</button>';
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+    var close = function(){ if (ov.parentNode) ov.parentNode.removeChild(ov); };
+    document.getElementById("mts-prev-ok").addEventListener("click", function(){ close(); onConfirm && onConfirm(); });
+    document.getElementById("mts-prev-cancel").addEventListener("click", close);
+    ov.addEventListener("click", function(e){ if (e.target === ov) close(); });
   }
 
   // Home: banner do video vira link pra /sale/ (HOTSALE)
