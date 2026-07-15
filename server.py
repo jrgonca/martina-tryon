@@ -801,39 +801,31 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     // registra 1 unica vez, roda em qualquer PDP/listagem/home
     if (document.__mtsPrevendaHooked) return;
     document.__mtsPrevendaHooked = true;
+    // Cache de decisao por card/botao pra evitar recalcular em cliques repetidos
+    var CACHE_ATTR = "data-mts-prev";
     document.addEventListener("click", function(ev){
       var t = ev.target;
       if (!t || !t.closest) return;
       // Botao de comprar/adicionar — cobre PDP + vitrine (card + Adicao Rapida do tema Idea)
       var btn = t.closest(
         ".js-addtocart:not(.js-addtocart-placeholder), " +
-        ".koba-add, " +
-        ".js-add-to-cart-button, " +
-        "button[name='add-cart'], " +
-        "[data-toggle-cart], " +
-        ".js-add-to-cart, " +
-        ".js-item-quick-add, " +
-        "[data-quick-add], " +
-        ".product-item__add-to-cart, " +
-        ".item-add-cart, " +
-        "button[data-add-to-cart], " +
-        "a[href*='cart/add']"
+        ".koba-add, .js-add-to-cart-button, button[name='add-cart'], [data-toggle-cart], " +
+        ".js-add-to-cart, .js-item-quick-add, [data-quick-add], " +
+        ".product-item__add-to-cart, .item-add-cart, button[data-add-to-cart], a[href*='cart/add']"
       );
       if (!btn) return;
       if (btn.__mtsConfirmed) { btn.__mtsConfirmed = false; return; }
 
-      // Descobre o produto:
-      //  1) URL /produtos/<slug>  (PDP)
-      //  2) card pai da vitrine tem link /produtos/<slug>
-      //  3) atributos data-* no card ou botao
+      // FAST PATH: cache "sem pre-venda" no botao pra sair na hora
+      var cached = btn.getAttribute(CACHE_ATTR);
+      if (cached === "no") return;
+
+      // Descobre slug (fast: PDP path -> card link -> data attrs)
       var slug2 = null;
       var m2 = location.pathname.match(/\/produtos\/([^\/?#]+)/);
       if (m2) slug2 = m2[1];
       if (!slug2) {
-        // vitrine/home: acha o card pai
-        var card = btn.closest(
-          ".js-product-container, .item-product, .product-item, .item, article, .card, [data-store='product-item']"
-        );
+        var card = btn.closest(".js-product-container, .item-product, .product-item, .item, article");
         if (card) {
           var link = card.querySelector('a[href*="/produtos/"]');
           if (link) {
@@ -842,32 +834,28 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
           }
         }
       }
-      if (!slug2) {
-        // fallback: proprio botao ou pai tem data-slug/data-handle/data-url
-        var el = btn;
-        for (var i = 0; i < 6 && el; i++) {
-          var url = el.getAttribute && (el.getAttribute("data-url") || el.getAttribute("href") || "");
-          var lm2 = url && url.match(/\/produtos\/([^\/?#]+)/);
-          if (lm2) { slug2 = lm2[1]; break; }
-          el = el.parentElement;
-        }
+      // Sem slug OU slug nao esta no mapa: marca cache "no" e sai rapido
+      if (!slug2 || !PREVENDA_PRODUTOS[slug2]) {
+        btn.setAttribute(CACHE_ATTR, "no");
+        return;
       }
-      if (!slug2) return;
       var cfg2 = PREVENDA_PRODUTOS[slug2];
-      if (!cfg2 || !cfg2.avisoCompra) return;
+      if (!cfg2.avisoCompra) { btn.setAttribute(CACHE_ATTR, "no"); return; }
       if (cfg2.ate) {
         try {
           var lim2 = new Date(cfg2.ate + "T23:59:59");
-          if (Date.now() > lim2.getTime()) return;
+          if (Date.now() > lim2.getTime()) { btn.setAttribute(CACHE_ATTR, "no"); return; }
         } catch(e){}
       }
       // Se cfg tem lista de variantes: so age quando tamanho selecionado bater
+      // NAO cachear no botao (variante pode mudar entre cliques)
       if (cfg2.variantes && cfg2.variantes.length) {
         var tamSel = getSelectedSize(btn);
-        if (!tamSel) return; // sem tamanho selecionado (Nuvemshop provavelmente vai avisar), deixa passar
+        if (!tamSel) return;
         var alvo = cfg2.variantes.map(function(x){return String(x).trim().toUpperCase();});
-        if (alvo.indexOf(String(tamSel).trim().toUpperCase()) < 0) return; // tamanho nao esta na lista, deixa passar
+        if (alvo.indexOf(String(tamSel).trim().toUpperCase()) < 0) return;
       }
+      // PRE-VENDA CONFIRMADA: trava click, mostra modal
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
@@ -1019,7 +1007,12 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   // (Quiz de tamanho agora vive DENTRO do provador virtual — widget.js integrado.
   //  Endpoint /size-quiz.js mantido pra compat mas nao e mais carregado automaticamente.)
 
-  function tick(){ if (isSale) runList(); if (isPdp) { runPdp(); runPrevenda(); } if (isHome) runHome(); }
+  function tick(){
+    if (isSale) runList();
+    if (isPdp) runPdp();
+    if (isHome) runHome();
+    runPrevenda(); // sempre — pra o handler global de click cobrir vitrine/home tambem
+  }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
 """
