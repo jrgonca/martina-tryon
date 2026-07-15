@@ -739,11 +739,11 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   // Mapa: slug -> { texto, ate (opcional YYYY-MM-DD pra sumir sozinho depois), avisoCompra }
   var PREVENDA_PRODUTOS = {
     "jeans-oversized-black-dust-tvpi0": {
-      texto: "📦 Pré-venda — envio a partir de 24/07",
-      ate: "2026-07-24",
+      texto: "📦 Pré-venda — envio a partir de 27/07",
+      ate: "2026-07-27",
       avisoCompra: {
         titulo: "Confirmar pré-venda",
-        corpo: "Este produto está em pré-venda. O envio começa a partir de 24/07. Deseja continuar?",
+        corpo: "Este produto está em pré-venda. O envio começa a partir de 27/07. Deseja continuar?",
         btnOk: "Sim, quero comprar",
         btnCancel: "Cancelar"
       }
