@@ -750,58 +750,105 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     }
   };
   function runPrevenda(){
-    if (!isPdp) return;
-    // slug da URL: /produtos/<slug>/
-    var m = location.pathname.match(/\/produtos\/([^\/?#]+)/);
-    if (!m) return;
-    var slug = m[1];
-    var cfg = PREVENDA_PRODUTOS[slug];
-    if (!cfg) return;
-    // sumiu se passou a data limite
-    if (cfg.ate){
-      try {
-        var lim = new Date(cfg.ate + "T23:59:59");
-        if (Date.now() > lim.getTime()) return;
-      } catch(e){}
-    }
-    // ---- BADGE VISUAL ----
-    if (!document.getElementById("mts-prevenda")) {
-      var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
-      if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
-      if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
-      if (anchor) {
-        var box = document.createElement("div");
-        box.id = "mts-prevenda";
-        box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
-        box.textContent = cfg.texto;
-        anchor.parentElement.insertBefore(box, anchor);
+    // ---- BADGE VISUAL (apenas na PDP) ----
+    if (isPdp && !document.getElementById("mts-prevenda")) {
+      var m = location.pathname.match(/\/produtos\/([^\/?#]+)/);
+      if (m) {
+        var slug = m[1];
+        var cfg = PREVENDA_PRODUTOS[slug];
+        if (cfg) {
+          var expired = false;
+          if (cfg.ate){
+            try {
+              var lim = new Date(cfg.ate + "T23:59:59");
+              if (Date.now() > lim.getTime()) expired = true;
+            } catch(e){}
+          }
+          if (!expired) {
+            var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
+            if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
+            if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
+            if (anchor) {
+              var box = document.createElement("div");
+              box.id = "mts-prevenda";
+              box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
+              box.textContent = cfg.texto;
+              anchor.parentElement.insertBefore(box, anchor);
+            }
+          }
+        }
       }
     }
 
-    // ---- INTERCEPT DE CLIQUE NO COMPRAR (com confirmacao) ----
-    if (!cfg.avisoCompra || document.__mtsPrevendaHooked) return;
+    // ---- INTERCEPT DE CLIQUE (funciona em QUALQUER pagina) ----
+    // registra 1 unica vez, roda em qualquer PDP/listagem/home
+    if (document.__mtsPrevendaHooked) return;
     document.__mtsPrevendaHooked = true;
-    // capture phase pra rodar ANTES de qualquer handler nativo do tema/nuvemshop.
-    // Se cliente confirmar, disparamos click de novo com flag __mtsConfirmed pra deixar passar.
     document.addEventListener("click", function(ev){
       var t = ev.target;
       if (!t || !t.closest) return;
-      // seletor de botoes de compra do tema Idea + Nuvemshop
-      var btn = t.closest(".js-addtocart:not(.js-addtocart-placeholder), .koba-add, .js-add-to-cart-button, button[name='add-cart'], [data-toggle-cart]");
+      // Botao de comprar/adicionar — cobre PDP + vitrine (card + Adicao Rapida do tema Idea)
+      var btn = t.closest(
+        ".js-addtocart:not(.js-addtocart-placeholder), " +
+        ".koba-add, " +
+        ".js-add-to-cart-button, " +
+        "button[name='add-cart'], " +
+        "[data-toggle-cart], " +
+        ".js-add-to-cart, " +
+        ".js-item-quick-add, " +
+        "[data-quick-add], " +
+        ".product-item__add-to-cart, " +
+        ".item-add-cart, " +
+        "button[data-add-to-cart], " +
+        "a[href*='cart/add']"
+      );
       if (!btn) return;
-      if (btn.__mtsConfirmed) { btn.__mtsConfirmed = false; return; } // segundo click programatico: deixa passar
-      // pre-venda? re-checar path (na SPA-like Nuvemshop o path pode ter mudado)
+      if (btn.__mtsConfirmed) { btn.__mtsConfirmed = false; return; }
+
+      // Descobre o produto:
+      //  1) URL /produtos/<slug>  (PDP)
+      //  2) card pai da vitrine tem link /produtos/<slug>
+      //  3) atributos data-* no card ou botao
+      var slug2 = null;
       var m2 = location.pathname.match(/\/produtos\/([^\/?#]+)/);
-      if (!m2 || !PREVENDA_PRODUTOS[m2[1]]) return;
-      var cfg2 = PREVENDA_PRODUTOS[m2[1]];
+      if (m2) slug2 = m2[1];
+      if (!slug2) {
+        // vitrine/home: acha o card pai
+        var card = btn.closest(
+          ".js-product-container, .item-product, .product-item, .item, article, .card, [data-store='product-item']"
+        );
+        if (card) {
+          var link = card.querySelector('a[href*="/produtos/"]');
+          if (link) {
+            var lm = (link.getAttribute("href") || "").match(/\/produtos\/([^\/?#]+)/);
+            if (lm) slug2 = lm[1];
+          }
+        }
+      }
+      if (!slug2) {
+        // fallback: proprio botao ou pai tem data-slug/data-handle/data-url
+        var el = btn;
+        for (var i = 0; i < 6 && el; i++) {
+          var url = el.getAttribute && (el.getAttribute("data-url") || el.getAttribute("href") || "");
+          var lm2 = url && url.match(/\/produtos\/([^\/?#]+)/);
+          if (lm2) { slug2 = lm2[1]; break; }
+          el = el.parentElement;
+        }
+      }
+      if (!slug2) return;
+      var cfg2 = PREVENDA_PRODUTOS[slug2];
       if (!cfg2 || !cfg2.avisoCompra) return;
-      // trava o click
+      if (cfg2.ate) {
+        try {
+          var lim2 = new Date(cfg2.ate + "T23:59:59");
+          if (Date.now() > lim2.getTime()) return;
+        } catch(e){}
+      }
       ev.preventDefault();
       ev.stopPropagation();
       ev.stopImmediatePropagation();
       showPrevendaModal(cfg2.avisoCompra, function(){
         btn.__mtsConfirmed = true;
-        // re-disparo click nativo: pixel/GA4/GTM continuam disparando normal via listeners deles
         try { btn.click(); } catch(e){}
       });
     }, true);
