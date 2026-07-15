@@ -1062,12 +1062,41 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     }
   }
 
+  // ---- Tamanho default por produto na PDP ----
+  // Se cliente abre a PDP SEM tamanho definido (sem ?mts_size), pre-seleciona o default.
+  // Motivo (jaqueta): badge de pre-lancamento e P-only; iniciando em M o badge so
+  // aparece se ela ATIVAMENTE escolher P (evita badge aparecer/sumir "do nada").
+  // One-shot por pageload: aplica UMA vez e nunca mais mexe (nao briga com escolha manual).
+  var PDP_DEFAULT_SIZE = {
+    "jaqueta-de-couro1": "M"
+  };
+  var defaultSizeDone = false;
+  function runDefaultSize(){
+    if (defaultSizeDone) return;
+    if (wantedSize) { defaultSizeDone = true; return; }  // mts_size explicito prevalece sempre
+    var m = location.pathname.match(/\/produtos\/([^\/?#]+)/);
+    if (!m) return;
+    var def = PDP_DEFAULT_SIZE[m[1]];
+    if (!def) { defaultSizeDone = true; return; }  // produto sem default: nao mexe
+    var s = document.querySelector("#variation_1, select[name='variation[0]']");
+    if (!s || !s.options || !s.options.length) return;  // select ainda nao pronto; tenta no proximo tick
+    var opt = Array.prototype.find.call(s.options, function(o){
+      return o.value === def || (o.text || "").trim().toUpperCase() === def.toUpperCase();
+    });
+    if (!opt) { defaultSizeDone = true; return; }
+    defaultSizeDone = true;
+    if (s.value !== opt.value) {
+      s.value = opt.value;
+      s.dispatchEvent(new Event("change", {bubbles:true}));
+    }
+  }
+
   // (Quiz de tamanho agora vive DENTRO do provador virtual — widget.js integrado.
   //  Endpoint /size-quiz.js mantido pra compat mas nao e mais carregado automaticamente.)
 
   function tick(){
     if (isSale) runList();
-    if (isPdp) runPdp();
+    if (isPdp) { runDefaultSize(); runPdp(); }
     if (isHome) runHome();
     runPrevenda(); // sempre — pra o handler global de click cobrir vitrine/home tambem
     fixQvClones(); // sempre — conserta "+" morto em slides duplicados do Swiper
