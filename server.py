@@ -806,14 +806,18 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     document.addEventListener("click", function(ev){
       var t = ev.target;
       if (!t || !t.closest) return;
+      // Quickview da vitrine (assortedJs "Zara v5"): clicar num TAMANHO adiciona via fetch /comprar/
+      // sem passar pelo .js-addtocart — precisa interceptar aqui tambem.
+      var qv = t.closest(".martina-qv-size");
       // Botao de comprar/adicionar — cobre PDP + vitrine (card + Adicao Rapida do tema Idea)
-      var btn = t.closest(
+      var btn = qv || t.closest(
         ".js-addtocart:not(.js-addtocart-placeholder), " +
         ".koba-add, .js-add-to-cart-button, button[name='add-cart'], [data-toggle-cart], " +
         ".js-add-to-cart, .js-item-quick-add, [data-quick-add], " +
         ".product-item__add-to-cart, .item-add-cart, button[data-add-to-cart], a[href*='cart/add']"
       );
       if (!btn) return;
+      if (qv && qv.disabled) return;
       if (btn.__mtsConfirmed) { btn.__mtsConfirmed = false; return; }
 
       // FAST PATH: cache "sem pre-venda" no botao pra sair na hora
@@ -850,7 +854,9 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
       // Se cfg tem lista de variantes: so age quando tamanho selecionado bater
       // NAO cachear no botao (variante pode mudar entre cliques)
       if (cfg2.variantes && cfg2.variantes.length) {
-        var tamSel = getSelectedSize(btn);
+        // No quickview o proprio botao clicado JA e o tamanho
+        var tamSel = qv ? ((qv.getAttribute("data-size-name") || qv.textContent || "").trim())
+                        : getSelectedSize(btn);
         if (!tamSel) return;
         var alvo = cfg2.variantes.map(function(x){return String(x).trim().toUpperCase();});
         if (alvo.indexOf(String(tamSel).trim().toUpperCase()) < 0) return;
@@ -893,6 +899,23 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
 
   // Pega tamanho selecionado — funciona em PDP e vitrine (se o card tem quick-select)
   function getSelectedSize(btn){
+    // Vitrine: escopar no CARD do botao (document.querySelector pegaria o select do 1o card da pagina!)
+    if (!isPdp && btn && btn.closest) {
+      var card0 = btn.closest(".js-product-container, .item-product, .product-item, article, .item");
+      if (card0) {
+        var s0 = card0.querySelector("select.js-variation-option, select[name*='variation' i], select[name*='tamanho' i], select[name*='size' i]");
+        if (s0 && s0.value) {
+          var o0 = s0.options[s0.selectedIndex];
+          return (o0 ? (o0.value || o0.text || "") : s0.value).trim();
+        }
+        var lk0 = card0.querySelector("a[href*='mts_size=']");
+        if (lk0) {
+          var lm0 = (lk0.getAttribute("href") || "").match(/[?&]mts_size=([^&#]+)/);
+          if (lm0) return decodeURIComponent(lm0[1]);
+        }
+        return null;
+      }
+    }
     // PDP: select de variacao
     var s = document.querySelector("#variation_1, select[name='variation[0]'], select[name*='tamanho' i], select[name*='size' i]");
     if (s && s.value) {
@@ -935,6 +958,39 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     document.getElementById("mts-prev-ok").addEventListener("click", function(){ close(); onConfirm && onConfirm(); });
     document.getElementById("mts-prev-cancel").addEventListener("click", close);
     ov.addEventListener("click", function(e){ if (e.target === ov) close(); });
+  }
+
+  // ---- FIX "+" MORTO NA VITRINE (Swiper loop) ----
+  // Swiper duplica slides com cloneNode: o clone vem com data-qv-init="1" mas SEM listeners.
+  // O initAll() do quickview (assortedJs) pula o clone ("ja inicializado") e o "+" vira um
+  // botao morto dentro do <a class="item-link"> — clique navega pra PDP (o "delay" percebido).
+  // Estrategia: remover os artefatos qv + o data-qv-init do clone; o MutationObserver do
+  // assortedJs re-inicializa o card com listeners vivos. Idempotente via __mtsQvFixed.
+  function fixQvClones(){
+    if (!document.getElementById("martina-quickview-zara-js")) return; // qv ausente: nao mexe
+    var dups = document.querySelectorAll(
+      ".swiper-slide-duplicate [data-qv-init], .swiper-slide-duplicate[data-qv-init], " +
+      ".slick-cloned [data-qv-init], .slick-cloned[data-qv-init]"
+    );
+    for (var i = 0; i < dups.length; i++) {
+      var card = dups[i];
+      if (card.__mtsQvFixed) continue;           // propriedade JS nao sobrevive a cloneNode
+      card.__mtsQvFixed = true;
+      var arts = card.querySelectorAll(".martina-qv-trigger, .martina-qv-bar, .martina-qv-flash");
+      for (var j = 0; j < arts.length; j++) {
+        if (arts[j].parentNode) arts[j].parentNode.removeChild(arts[j]);
+      }
+      card.removeAttribute("data-qv-init");      // MutationObserver do assortedJs re-inicializa
+    }
+  }
+  function hookQvFixObserver(){
+    if (document.__mtsQvFixMo || !window.MutationObserver || !document.body) return;
+    document.__mtsQvFixMo = true;
+    var pend = null;
+    new MutationObserver(function(){
+      if (pend) return;
+      pend = setTimeout(function(){ pend = null; fixQvClones(); }, 150);
+    }).observe(document.body, {childList: true, subtree: true});
   }
 
   // Home: banner do video vira link pra /sale/ (HOTSALE)
@@ -1012,6 +1068,8 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
     if (isPdp) runPdp();
     if (isHome) runHome();
     runPrevenda(); // sempre — pra o handler global de click cobrir vitrine/home tambem
+    fixQvClones(); // sempre — conserta "+" morto em slides duplicados do Swiper
+    hookQvFixObserver();
   }
   [0, 300, 800, 1500, 3000, 6000].forEach(function(m){ setTimeout(tick, m); });
 })();
