@@ -763,7 +763,7 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
   };
   function runPrevenda(){
     // ---- BADGE VISUAL (apenas na PDP) ----
-    if (isPdp && !document.getElementById("mts-prevenda")) {
+    if (isPdp) {
       var m = location.pathname.match(/\/produtos\/([^\/?#]+)/);
       if (m) {
         var slug = m[1];
@@ -777,15 +777,20 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
             } catch(e){}
           }
           if (!expired) {
-            var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
-            if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
-            if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
-            if (anchor) {
-              var box = document.createElement("div");
-              box.id = "mts-prevenda";
-              box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
-              box.textContent = cfg.texto;
-              anchor.parentElement.insertBefore(box, anchor);
+            atualizarBadgePrevenda(cfg);
+            // se cfg tem variantes, escuta mudanca pra mostrar/esconder dinamico
+            if (cfg.variantes && cfg.variantes.length && !document.__mtsPrevendaVarHook) {
+              document.__mtsPrevendaVarHook = true;
+              var refresh = function(){ atualizarBadgePrevenda(cfg); };
+              document.addEventListener("change", function(e){
+                if (!e.target || !e.target.matches) return;
+                if (e.target.matches("#variation_1, select[name='variation[0]'], select[name*='tamanho' i], select[name*='size' i]")) refresh();
+              }, true);
+              document.addEventListener("click", function(e){
+                if (!e.target || !e.target.closest) return;
+                var b = e.target.closest(".js-variation-option, .variation-option, [data-variation], .js-size, .size-option");
+                if (b) setTimeout(refresh, 50);
+              }, true);
             }
           }
         }
@@ -871,6 +876,31 @@ _HOTSALE_PRICE_JS = r"""/* HOTSALE — min preco na listagem + pre-selecionar va
         try { btn.click(); } catch(e){}
       });
     }, true);
+  }
+
+  // Cria (ou remove) o badge de pré-venda na PDP baseado na variante selecionada
+  function atualizarBadgePrevenda(cfg){
+    var jaExiste = document.getElementById("mts-prevenda");
+    var deveMostrar = true;
+    if (cfg.variantes && cfg.variantes.length) {
+      var tamSel = getSelectedSize(null);
+      var alvo = cfg.variantes.map(function(x){return String(x).trim().toUpperCase();});
+      deveMostrar = !!(tamSel && alvo.indexOf(String(tamSel).trim().toUpperCase()) >= 0);
+    }
+    if (deveMostrar && !jaExiste) {
+      var anchor = document.querySelector(".js-price-container, .product-price, [itemprop='price']");
+      if (anchor && anchor.closest) anchor = anchor.closest(".js-price-container, .product-price, .price, .product-info, .js-product-detail") || anchor;
+      if (!anchor) anchor = document.querySelector("h1.product-name, h1[itemprop='name'], h1.product-title, h1");
+      if (anchor) {
+        var box = document.createElement("div");
+        box.id = "mts-prevenda";
+        box.setAttribute("style", "background:#f4ede0;color:#4a3a1f;border:1px solid #d9c99f;border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px;font-weight:600;letter-spacing:.02em;line-height:1.4;font-family:inherit;text-align:center");
+        box.textContent = cfg.texto;
+        anchor.parentElement.insertBefore(box, anchor);
+      }
+    } else if (!deveMostrar && jaExiste) {
+      jaExiste.parentNode.removeChild(jaExiste);
+    }
   }
 
   // Pega tamanho selecionado — funciona em PDP e vitrine (se o card tem quick-select)
